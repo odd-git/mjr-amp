@@ -1,0 +1,569 @@
+{
+ "source": "MRSH MJR 1968 NAM DI (Amalgam Audio) PDF legend",
+ "captures": [
+  {
+   "file": "MRSH MJR I Clean THN DI.nam",
+   "channel": "I",
+   "level": "Clean",
+   "voicing": "THN",
+   "knobs": {
+    "presence": 4.0,
+    "bass": 10.0,
+    "middle": 7.0,
+    "treble": 6.0,
+    "volume1": 1.5,
+    "volume2": 7.0
+   }
+  },
+  {
+   "file": "MRSH MJR I Clean WRM DI.nam",
+   "channel": "I",
+   "level": "Clean",
+   "voicing": "WRM",
+   "knobs": {
+    "presence": 6.0,
+    "bass": 10.0,
+    "middle": 6.0,
+    "treble": 2.0,
+    "volume1": 1.5,
+    "volume2": 7.0
+   }
+  },
+  {
+   "file": "MRSH MJR JU Clean BRI DI.nam",
+   "channel": "JU",
+   "level": "Clean",
+   "voicing": "BRI",
+   "knobs": {
+    "presence": 4.0,
+    "bass": 3.5,
+    "middle": 7.0,
+    "treble": 7.5,
+    "volume1": 1.5,
+    "volume2": 1.5
+   }
+  },
+  {
+   "file": "MRSH MJR JU Clean BAL DI.nam",
+   "channel": "JU",
+   "level": "Clean",
+   "voicing": "BAL",
+   "knobs": {
+    "presence": 6.0,
+    "bass": 4.0,
+    "middle": 7.0,
+    "treble": 6.0,
+    "volume1": 1.5,
+    "volume2": 1.5
+   }
+  },
+  {
+   "file": "MRSH MJR JU Clean FAT DI.nam",
+   "channel": "JU",
+   "level": "Clean",
+   "voicing": "FAT",
+   "knobs": {
+    "presence": 6.0,
+    "bass": 6.0,
+    "middle": 6.0,
+    "treble": 6.0,
+    "volume1": 1.5,
+    "volume2": 1.5
+   }
+  },
+  {
+   "file": "MRSH MJR JU Clean SCP DI.nam",
+   "channel": "JU",
+   "level": "Clean",
+   "voicing": "SCP",
+   "knobs": {
+    "presence": 8.0,
+    "bass": 4.0,
+    "middle": 2.0,
+    "treble": 7.0,
+    "volume1": 1.5,
+    "volume2": 1.5
+   }
+  },
+  {
+   "file": "MRSH MJR I Edge THN DI.nam",
+   "channel": "I",
+   "level": "Edge",
+   "voicing": "THN",
+   "knobs": {
+    "presence": 0.0,
+    "bass": 4.0,
+    "middle": 7.0,
+    "treble": 6.0,
+    "volume1": 3.0,
+    "volume2": 0.0
+   }
+  },
+  {
+   "file": "MRSH MJR I Edge BAL DI.nam",
+   "channel": "I",
+   "level": "Edge",
+   "voicing": "BAL",
+   "knobs": {
+    "presence": 6.0,
+    "bass": 10.0,
+    "middle": 7.0,
+    "treble": 5.0,
+    "volume1": 2.5,
+    "volume2": 7.0
+   }
+  },
+  {
+   "file": "MRSH MJR JU Edge BRI DI.nam",
+   "channel": "JU",
+   "level": "Edge",
+   "voicing": "BRI",
+   "knobs": {
+    "presence": 6.0,
+    "bass": 4.0,
+    "middle": 7.0,
+    "treble": 6.5,
+    "volume1": 2.0,
+    "volume2": 1.5
+   }
+  },
+  {
+   "file": "MRSH MJR JU Edge BAL DI.nam",
+   "channel": "JU",
+   "level": "Edge",
+   "voicing": "BAL",
+   "knobs": {
+    "presence": 6.0,
+    "bass": 1.5,
+    "middle": 7.0,
+    "treble": 4.0,
+    "volume1": 2.5,
+    "volume2": 1.5
+   }
+  },
+  {
+   "file": "MRSH MJR JU Edge WRM DI.nam",
+   "channel": "JU",
+   "level": "Edge",
+   "voicing": "WRM",
+   "knobs": {
+    "presence": 4.0,
+    "bass": 2.0,
+    "middle": 6.0,
+    "treble": 4.0,
+    "volume1": 2.0,
+    "volume2": 2.0
+   }
+  },
+  {
+   "file": "MRSH MJR JU Edge JF DI.nam",
+   "channel": "JU",
+   "level": "Edge",
+   "voicing": "JF",
+   "knobs": {
+    "presence": 0.0,
+    "bass": 1.0,
+    "middle": 6.0,
+    "treble": 4.0,
+    "volume1": 4.0,
+    "volume2": 2.0
+   }
+  },
+  {
+   "file": "MRSH MJR JU Edge FAT DI.nam",
+   "channel": "JU",
+   "level": "Edge",
+   "voicing": "FAT",
+   "knobs": {
+    "presence": 4.0,
+    "bass": 4.0,
+    "middle": 7.0,
+    "treble": 4.5,
+    "volume1": 2.5,
+    "volume2": 1.5
+   }
+  },
+  {
+   "file": "MRSH MJR JU Edge SCP DI.nam",
+   "channel": "JU",
+   "level": "Edge",
+   "voicing": "SCP",
+   "knobs": {
+    "presence": 8.0,
+    "bass": 1.0,
+    "middle": 4.0,
+    "treble": 6.0,
+    "volume1": 3.0,
+    "volume2": 1.5
+   }
+  },
+  {
+   "file": "MRSH MJR JU Edge PED DI.nam",
+   "channel": "JU",
+   "level": "Edge",
+   "voicing": "PED",
+   "knobs": {
+    "presence": 3.0,
+    "bass": 1.5,
+    "middle": 7.0,
+    "treble": 4.0,
+    "volume1": 3.0,
+    "volume2": 2.0
+   }
+  },
+  {
+   "file": "MRSH MJR I Crunch THN DI.nam",
+   "channel": "I",
+   "level": "Crunch",
+   "voicing": "THN",
+   "knobs": {
+    "presence": 4.0,
+    "bass": 2.0,
+    "middle": 7.0,
+    "treble": 4.0,
+    "volume1": 6.5,
+    "volume2": 7.0
+   }
+  },
+  {
+   "file": "MRSH MJR I Crunch BRI DI.nam",
+   "channel": "I",
+   "level": "Crunch",
+   "voicing": "BRI",
+   "knobs": {
+    "presence": 0.0,
+    "bass": 3.0,
+    "middle": 7.0,
+    "treble": 2.0,
+    "volume1": 7.0,
+    "volume2": 6.5
+   }
+  },
+  {
+   "file": "MRSH MJR I Crunch BRI2 DI.nam",
+   "channel": "I",
+   "level": "Crunch",
+   "voicing": "BRI2",
+   "knobs": {
+    "presence": 6.0,
+    "bass": 4.0,
+    "middle": 7.0,
+    "treble": 6.0,
+    "volume1": 6.5,
+    "volume2": 5.0
+   }
+  },
+  {
+   "file": "MRSH MJR I Crunch BAL DI.nam",
+   "channel": "I",
+   "level": "Crunch",
+   "voicing": "BAL",
+   "knobs": {
+    "presence": 4.5,
+    "bass": 1.5,
+    "middle": 7.0,
+    "treble": 4.0,
+    "volume1": 6.0,
+    "volume2": 5.0
+   }
+  },
+  {
+   "file": "MRSH MJR I Crunch BAL2 DI.nam",
+   "channel": "I",
+   "level": "Crunch",
+   "voicing": "BAL2",
+   "knobs": {
+    "presence": 0.0,
+    "bass": 2.0,
+    "middle": 7.0,
+    "treble": 7.0,
+    "volume1": 7.5,
+    "volume2": 4.0
+   }
+  },
+  {
+   "file": "MRSH MJR JU Crunch BRI DI.nam",
+   "channel": "JU",
+   "level": "Crunch",
+   "voicing": "BRI",
+   "knobs": {
+    "presence": 6.0,
+    "bass": 2.0,
+    "middle": 7.0,
+    "treble": 7.5,
+    "volume1": 6.5,
+    "volume2": 5.0
+   }
+  },
+  {
+   "file": "MRSH MJR JU Crunch BAL DI.nam",
+   "channel": "JU",
+   "level": "Crunch",
+   "voicing": "BAL",
+   "knobs": {
+    "presence": 4.5,
+    "bass": 1.5,
+    "middle": 7.0,
+    "treble": 4.0,
+    "volume1": 6.0,
+    "volume2": 5.0
+   }
+  },
+  {
+   "file": "MRSH MJR JU Crunch WRM DI.nam",
+   "channel": "JU",
+   "level": "Crunch",
+   "voicing": "WRM",
+   "knobs": {
+    "presence": 0.0,
+    "bass": 1.5,
+    "middle": 7.5,
+    "treble": 4.0,
+    "volume1": 5.5,
+    "volume2": 3.5
+   }
+  },
+  {
+   "file": "MRSH MJR JU Crunch FAT DI.nam",
+   "channel": "JU",
+   "level": "Crunch",
+   "voicing": "FAT",
+   "knobs": {
+    "presence": 0.0,
+    "bass": 2.0,
+    "middle": 6.0,
+    "treble": 5.0,
+    "volume1": 5.5,
+    "volume2": 3.0
+   }
+  },
+  {
+   "file": "MRSH MJR JU Crunch SCP DI.nam",
+   "channel": "JU",
+   "level": "Crunch",
+   "voicing": "SCP",
+   "knobs": {
+    "presence": 6.0,
+    "bass": 0.0,
+    "middle": 6.0,
+    "treble": 6.5,
+    "volume1": 6.0,
+    "volume2": 3.0
+   }
+  },
+  {
+   "file": "MRSH MJR I Dimed THN DI.nam",
+   "channel": "I",
+   "level": "Dimed",
+   "voicing": "THN",
+   "knobs": {
+    "presence": 6.0,
+    "bass": 0.0,
+    "middle": 7.5,
+    "treble": 6.0,
+    "volume1": 8.5,
+    "volume2": 0.0
+   }
+  },
+  {
+   "file": "MRSH MJR I Dimed BRI DI.nam",
+   "channel": "I",
+   "level": "Dimed",
+   "voicing": "BRI",
+   "knobs": {
+    "presence": 6.0,
+    "bass": 1.5,
+    "middle": 7.0,
+    "treble": 7.5,
+    "volume1": 8.5,
+    "volume2": 4.0
+   }
+  },
+  {
+   "file": "MRSH MJR I Dimed BAL DI.nam",
+   "channel": "I",
+   "level": "Dimed",
+   "voicing": "BAL",
+   "knobs": {
+    "presence": 2.0,
+    "bass": 0.0,
+    "middle": 7.0,
+    "treble": 6.0,
+    "volume1": 8.5,
+    "volume2": 6.0
+   }
+  },
+  {
+   "file": "MRSH MJR I Dimed BAL2 DI.nam",
+   "channel": "I",
+   "level": "Dimed",
+   "voicing": "BAL2",
+   "knobs": {
+    "presence": 4.0,
+    "bass": 0.0,
+    "middle": 10.0,
+    "treble": 10.0,
+    "volume1": 9.0,
+    "volume2": 0.0
+   }
+  },
+  {
+   "file": "MRSH MJR I Dimed BAL3 DI.nam",
+   "channel": "I",
+   "level": "Dimed",
+   "voicing": "BAL3",
+   "knobs": {
+    "presence": 0.0,
+    "bass": 0.0,
+    "middle": 8.0,
+    "treble": 8.0,
+    "volume1": 9.0,
+    "volume2": 0.0
+   }
+  },
+  {
+   "file": "MRSH MJR I Dimed WRM DI.nam",
+   "channel": "I",
+   "level": "Dimed",
+   "voicing": "WRM",
+   "knobs": {
+    "presence": 2.0,
+    "bass": 1.0,
+    "middle": 7.5,
+    "treble": 4.0,
+    "volume1": 8.5,
+    "volume2": 7.0
+   }
+  },
+  {
+   "file": "MRSH MJR I Dimed SCP DI.nam",
+   "channel": "I",
+   "level": "Dimed",
+   "voicing": "SCP",
+   "knobs": {
+    "presence": 4.0,
+    "bass": 0.0,
+    "middle": 6.0,
+    "treble": 7.0,
+    "volume1": 8.5,
+    "volume2": 6.0
+   }
+  },
+  {
+   "file": "MRSH MJR I Dimed AllOn10 DI.nam",
+   "channel": "I",
+   "level": "Dimed",
+   "voicing": "AllOn10",
+   "knobs": {
+    "presence": 10.0,
+    "bass": 0.0,
+    "middle": 10.0,
+    "treble": 10.0,
+    "volume1": 9.0,
+    "volume2": 0.0
+   }
+  },
+  {
+   "file": "MRSH MJR JU Dimed FAT DI.nam",
+   "channel": "JU",
+   "level": "Dimed",
+   "voicing": "FAT",
+   "knobs": {
+    "presence": 6.0,
+    "bass": 0.0,
+    "middle": 7.0,
+    "treble": 6.5,
+    "volume1": 8.5,
+    "volume2": 6.0
+   }
+  },
+  {
+   "file": "MRSH MJR JU Drive BAL KOT DI.nam",
+   "channel": "JU",
+   "level": "Drive",
+   "voicing": "BAL",
+   "knobs": {
+    "presence": 2.0,
+    "bass": 1.5,
+    "middle": 6.5,
+    "treble": 4.0,
+    "volume1": 3.0,
+    "volume2": 2.0
+   },
+   "pedal": "KOT",
+   "pedalSettings": "KOT V6 T8 D9 YELLOW"
+  },
+  {
+   "file": "MRSH MJR JU Drive BAL RDR DI.nam",
+   "channel": "JU",
+   "level": "Drive",
+   "voicing": "BAL",
+   "knobs": {
+    "presence": 0.0,
+    "bass": 1.5,
+    "middle": 6.0,
+    "treble": 4.0,
+    "volume1": 3.0,
+    "volume2": 2.0
+   },
+   "pedal": "RDR",
+   "pedalSettings": "RDR P5 L0 V6 G0 B10 O7.5 WHITE"
+  },
+  {
+   "file": "MRSH MJR JU Drive BAL FD2 DI.nam",
+   "channel": "JU",
+   "level": "Drive",
+   "voicing": "BAL",
+   "knobs": {
+    "presence": 0.0,
+    "bass": 1.5,
+    "middle": 6.0,
+    "treble": 4.0,
+    "volume1": 3.0,
+    "volume2": 2.0
+   },
+   "pedal": "FD2",
+   "pedalSettings": "FD2 V10 T10 O10 FM"
+  },
+  {
+   "file": "MRSH MJR JU Drive WRM 808 DI.nam",
+   "channel": "JU",
+   "level": "Drive",
+   "voicing": "WRM",
+   "knobs": {
+    "presence": 2.0,
+    "bass": 2.0,
+    "middle": 6.0,
+    "treble": 4.0,
+    "volume1": 3.0,
+    "volume2": 2.0
+   },
+   "pedal": "808",
+   "pedalSettings": "808 O5 T7 L10"
+  },
+  {
+   "file": "MRSH MJR JU Lead BAL KOT DI.nam",
+   "channel": "JU",
+   "level": "Lead",
+   "voicing": "BAL",
+   "knobs": {
+    "presence": 3.0,
+    "bass": 1.5,
+    "middle": 6.0,
+    "treble": 4.0,
+    "volume1": 3.0,
+    "volume2": 2.0
+   },
+   "pedal": "KOT",
+   "pedalSettings": "KOT V6 T8.5 D10 RED"
+  },
+  {
+   "file": "MRSH MJR JU Lead BAL2 KOT DI.nam",
+   "channel": "JU",
+   "level": "Lead",
+   "voicing": "BAL2",
+   "pedal": "KOT",
+   "note": "not in the PDF legend: knob settings unknown"
+  }
+ ]
+}
