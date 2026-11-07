@@ -18,6 +18,17 @@ cmake --build build --parallel
 Linux deps (Debian/Ubuntu): `libasound2-dev libjack-jackd2-dev libfreetype-dev libfontconfig1-dev
 libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxext-dev libxcomposite-dev libxi-dev libgl1-mesa-dev`.
 
+## Linux standalone
+
+Run it on the host (not inside a build container), through PipeWire's JACK:
+
+```sh
+pw-jack "build/MJRAmp_artefacts/Release/Standalone/MJR Amp"
+```
+
+Then **AUDIO** > Audio device type **JACK**, pick the interface, and choose the guitar's
+input with the **INPUT CH** switch. Close other apps that hold the interface directly.
+
 ## Tuner and metronome
 
 - **TUNER** replaces the main view with a chromatic tuner (A4 = 440 Hz) and mutes the amp.

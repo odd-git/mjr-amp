@@ -78,6 +78,7 @@ private:
 
     double sampleRate = 48000.0;
     juce::SmoothedValue<float> driveGain, outGain;
+    juce::dsp::NoiseGate<float> noiseGate;
     std::array<juce::dsp::IIR::Filter<float>, 4> eq;
     std::array<float, 4> eqDb { 1e9f, 1e9f, 1e9f, 1e9f };
 
@@ -87,7 +88,7 @@ private:
     juce::AudioBuffer<float> dry, slotBuf;
 
     std::array<std::atomic<float>*, 6> knob {};
-    std::atomic<float> *input, *output, *metroOn, *bpm, *beats, *metroLevel;
+    std::atomic<float> *input, *output, *inputSource, *gate, *metroOn, *bpm, *beats, *metroLevel;
 
     void addMetronome(juce::AudioBuffer<float>&, int numOut);
     double metroSamples = 0; // free-running position, in samples since the last beat

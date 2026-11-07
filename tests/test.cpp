@@ -39,6 +39,19 @@ static void setParam(MJRAmpProcessor& p, const char* id, float value)
 int main(int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI juce;
+    if (argc > 1 && juce::String(argv[1]) == "--devices") // what the standalone can open on this machine
+    {
+        juce::AudioDeviceManager dm;
+        juce::OwnedArray<juce::AudioIODeviceType> types;
+        dm.createAudioDeviceTypes(types);
+        for (auto* t : types)
+        {
+            t->scanForDevices();
+            std::cout << t->getTypeName() << "\n  in:  " << t->getDeviceNames(true).joinIntoString(" | ")
+                      << "\n  out: " << t->getDeviceNames(false).joinIntoString(" | ") << "\n";
+        }
+        return 0;
+    }
     if (argc < 3)
         return std::cerr << "usage: mjr-test <library dir> <DI wav>\n", 2;
     const auto cwd = juce::File::getCurrentWorkingDirectory();
@@ -208,6 +221,35 @@ int main(int argc, char** argv)
         CHECK(p.beatInBar == 0, "fifth click should be a downbeat");
         float tunerBuf[512];
         CHECK(p.copyTunerInput(tunerBuf, 512) == 512, "tuner input");
+    }
+
+    // 8. Input source picks the interface channel; the gate silences low-level noise.
+    {
+        MJRAmpProcessor p;
+        p.setLibraryDir(lib);
+        p.prepareToPlay(48000, block);
+        waitIdle(p, block);
+        auto rmsOut = [&](int sourceChannel, float level)
+        {
+            juce::AudioBuffer<float> buf(2, 48000);
+            buf.clear();
+            buf.addFrom(sourceChannel, 0, di, 0, di.getNumSamples() / 2, buf.getNumSamples(), level);
+            run(p, buf, block);
+            return buf.getRMSLevel(0, 24000, 24000);
+        };
+        setParam(p, "inputSource", 1.0f); // Input 2
+        const float onCh2 = rmsOut(1, 1.0f), wrongCh = rmsOut(0, 1.0f);
+        std::cout << "input 2: rms " << onCh2 << ", guitar on input 1: " << wrongCh << "\n";
+        CHECK(onCh2 > 0.01f && wrongCh < onCh2 * 0.05f, "input source selection");
+        setParam(p, "inputSource", 0.0f);
+
+        const float quietOpen = rmsOut(0, 0.003f); // ~ -50 dB: hum/noise level
+        setParam(p, "gate", -40.0f);
+        rmsOut(0, 0.003f); // let the gate settle
+        const float quietGated = rmsOut(0, 0.003f), loudGated = rmsOut(0, 1.0f);
+        std::cout << "gate: noise " << quietOpen << " -> " << quietGated << ", playing " << loudGated << "\n";
+        CHECK(quietGated < quietOpen * 0.1f, "gate does not cut noise");
+        CHECK(loudGated > onCh2 * 0.5f, "gate cuts the playing");
     }
 
     // 5. Optional: editor snapshots, mjr-test <lib> <DI> <out dir>

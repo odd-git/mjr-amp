@@ -3,6 +3,7 @@
 #include "Processor.h"
 #include "BinaryData.h"
 #include "Pitch.h"
+#include <juce_audio_plugin_client/Standalone/juce_StandaloneFilterWindow.h>
 
 namespace
 {
@@ -139,7 +140,11 @@ struct LabeledKnob : juce::Component
         addAndMakeVisible(knob);
         showValue();
     }
-    void showValue() { value.setText(knob.getTextFromValue(knob.getValue()) + (unit.isEmpty() ? "" : " " + unit), juce::dontSendNotification); }
+    void showValue()
+    {
+        const auto text = knob.getTextFromValue(knob.getValue());
+        value.setText(unit.isEmpty() || !text.containsAnyOf("0123456789") ? text : text + " " + unit, juce::dontSendNotification);
+    }
     void resized() override
     {
         auto r = getLocalBounds();
@@ -155,7 +160,7 @@ struct LabeledKnob : juce::Component
 // Top-bar button: drawn icon with its caption underneath.
 struct IconButton : juce::Button
 {
-    enum Icon { tuner, metronome, folder };
+    enum Icon { tuner, metronome, folder, audio };
     IconButton(const juce::String& caption, Icon i) : juce::Button(caption), icon(i) {}
     bool lit = false; // metronome beat light
     bool downbeat = false;
@@ -188,6 +193,15 @@ struct IconButton : juce::Button
                 p.startNewSubPath(b.getCentreX(), b.getBottom() - 6);
                 p.lineTo(b.getRight() - 6, b.getY() + 4);
                 break;
+            case audio: // speaker
+                p.addRectangle(b.getX() + 3, b.getY() + 10, 7, 10);
+                p.startNewSubPath(b.getX() + 10, b.getY() + 10);
+                p.lineTo(b.getX() + 18, b.getY() + 3);
+                p.lineTo(b.getX() + 18, b.getBottom() - 3);
+                p.lineTo(b.getX() + 10, b.getY() + 20);
+                p.addCentredArc(b.getX() + 18, b.getCentreY(), 6, 6, 0, 0.6f, 2.55f, true);
+                p.addCentredArc(b.getX() + 18, b.getCentreY(), 11, 11, 0, 0.6f, 2.55f, true);
+                break;
             case folder:
                 p.startNewSubPath(b.getX() + 1, b.getY() + 5);
                 p.lineTo(b.getX() + 11, b.getY() + 5);
@@ -206,6 +220,29 @@ struct IconButton : juce::Button
         }
     }
     Icon icon;
+};
+
+// Input channel switch: which interface input the guitar is plugged into.
+struct ChannelSwitch : juce::ToggleButton
+{
+    ChannelSwitch() : juce::ToggleButton("Input source") { setTooltip("Interface input with the guitar"); }
+    void paintButton(juce::Graphics& g, bool over, bool) override
+    {
+        auto r = getLocalBounds().toFloat();
+        g.setFont(juce::FontOptions(12.0f, juce::Font::bold));
+        g.setColour(col::text);
+        g.drawText("INPUT CH", r.removeFromBottom(18), juce::Justification::centred);
+        auto row = r.withSizeKeepingCentre(r.getWidth(), 26);
+        const bool two = getToggleState();
+        g.setColour(two ? col::dim : col::accent);
+        g.drawText("1", row.removeFromLeft(22), juce::Justification::centred);
+        g.setColour(two ? col::accent : col::dim);
+        g.drawText("2", row.removeFromRight(22), juce::Justification::centred);
+        auto pill = row.withSizeKeepingCentre(44, 22);
+        g.setColour(over ? col::text : juce::Colour(0xffd0d0d0));
+        g.drawRoundedRectangle(pill.reduced(1), 11, 2);
+        g.fillEllipse(juce::Rectangle<float>(14, 14).withCentre({ two ? pill.getRight() - 11 : pill.getX() + 11, pill.getCentreY() }));
+    }
 };
 
 // The rig: amp head (photo or drawn) standing on a drawn cabinet. The cabinet's top band
@@ -595,7 +632,7 @@ public:
     static constexpr int baseW = 1280, baseH = 900; // laid out at this size, scaled to the window
 
     Editor(MJRAmpProcessor& proc)
-        : AudioProcessorEditor(proc), p(proc), rig(proc), tuner(proc), input(proc.params, "input", "INPUT"),
+        : AudioProcessorEditor(proc), p(proc), rig(proc), tuner(proc), input(proc.params, "input", "INPUT"), gate(proc.params, "gate", "GATE"),
           output(proc.params, "output", "OUTPUT")
     {
         setLookAndFeel(&look);
@@ -655,12 +692,21 @@ public:
             juce::CallOutBox::launchAsynchronously(std::make_unique<MetroPanel>(p), content.getLocalArea(&metroButton, metroButton.getLocalBounds()), &content);
         };
         libraryButton.setTooltip("Folder with the .nam captures and IRs");
+        // Standalone app: a guitar amp needs its input, so don't keep JUCE's anti-feedback mute,
+        // and give direct access to the audio device settings.
+        if (auto* holder = juce::StandalonePluginHolder::getInstance())
+        {
+            holder->getMuteInputValue().setValue(false);
+            audioButton.setTooltip("Audio interface, inputs and outputs");
+            audioButton.onClick = [holder] { holder->showAudioSettingsDialog(); };
+            content.addAndMakeVisible(audioButton);
+        }
         libraryButton.onClick = [this] { chooseLibrary(); };
 
         for (int s = 0; s < MJRAmpProcessor::numIrSlots; ++s)
             irs.add(new IrBlock(p, s));
 
-        for (juce::Component* c : { (juce::Component*)&title, (juce::Component*)&input, (juce::Component*)&output, (juce::Component*)&inMeter,
+        for (juce::Component* c : { (juce::Component*)&title, (juce::Component*)&input, (juce::Component*)&gate, (juce::Component*)&inputSwitch, (juce::Component*)&output, (juce::Component*)&inMeter,
                                     (juce::Component*)&outMeter, (juce::Component*)&tunerButton, (juce::Component*)&metroButton,
                                     (juce::Component*)&libraryButton, (juce::Component*)&prevCapture, (juce::Component*)&capture,
                                     (juce::Component*)&nextCapture, (juce::Component*)&captureLabel, (juce::Component*)&captured,
@@ -698,12 +744,16 @@ private:
     void layout()
     {
         title.setBounds(20, 8, 120, 20);
-        tunerButton.setBounds(535, 8, 70, 58);
-        metroButton.setBounds(605, 8, 70, 58);
-        libraryButton.setBounds(675, 8, 70, 58);
+        const int iconsX = audioButton.isVisible() ? 500 : 535;
+        tunerButton.setBounds(iconsX, 8, 70, 58);
+        metroButton.setBounds(iconsX + 70, 8, 70, 58);
+        libraryButton.setBounds(iconsX + 140, 8, 70, 58);
+        audioButton.setBounds(iconsX + 210, 8, 70, 58);
 
         inMeter.setBounds(34, 60, 6, 140);
         input.setBounds(60, 56, 130, 150);
+        gate.setBounds(196, 86, 92, 120);
+        inputSwitch.setBounds(296, 120, 90, 50);
         output.setBounds(baseW - 190, 56, 130, 150);
         outMeter.setBounds(baseW - 40, 60, 6, 140);
 
@@ -814,11 +864,13 @@ private:
     juce::ComboBox capture;
     juce::TextButton prevCapture, nextCapture, resetKnobs;
     IconButton tunerButton { "TUNER", IconButton::tuner }, metroButton { "METRO", IconButton::metronome },
-        libraryButton { "LIBRARY", IconButton::folder };
+        libraryButton { "LIBRARY", IconButton::folder }, audioButton { "AUDIO", IconButton::audio };
+    ChannelSwitch inputSwitch;
+    juce::AudioProcessorValueTreeState::ButtonAttachment inputSwitchAtt { p.params, "inputSource", inputSwitch };
     Rig rig;
     TunerView tuner;
     juce::OwnedArray<IrBlock> irs;
-    LabeledKnob input, output;
+    LabeledKnob input, gate, output;
     Meter inMeter, outMeter;
     std::unique_ptr<juce::FileChooser> chooser;
     int shownCapture = -1, shownBeat = 0;

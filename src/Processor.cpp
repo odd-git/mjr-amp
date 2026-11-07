@@ -52,6 +52,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout(const std::vector
                                                      AudioParameterFloatAttributes().withLabel("dB"));
     };
     l.add(db("input", "Input", -24.0f, 12.0f, 0.0f));
+    l.add(std::make_unique<AudioParameterChoice>(ParameterID { "inputSource", 1 }, "Input Source", StringArray { "Input 1", "Input 2" }, 0));
+    l.add(std::make_unique<AudioParameterFloat>(ParameterID { "gate", 1 }, "Gate", NormalisableRange<float>(-100.0f, 0.0f, 0.5f), -100.0f,
+                                                AudioParameterFloatAttributes().withLabel("dB").withStringFromValueFunction(
+                                                    [](float v, int) { return v <= -99.9f ? String("Off") : String(v, 1); })));
     l.add(db("output", "Output", -24.0f, 12.0f, 0.0f));
 
     for (int s = 1; s <= MJRAmpProcessor::numIrSlots; ++s)
@@ -73,7 +77,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout(const std::vector
 
 MJRAmpProcessor::MJRAmpProcessor()
     : AudioProcessor(BusesProperties()
-                         .withInput("Input", juce::AudioChannelSet::mono(), true)
+                         .withInput("Input", juce::AudioChannelSet::stereo(), true) // pick the guitar's channel with inputSource
                          .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       params(*this, nullptr, "MJRAmp", makeLayout(captures = parseCaptures()))
 {
@@ -81,6 +85,8 @@ MJRAmpProcessor::MJRAmpProcessor()
         knob[(size_t)i] = params.getRawParameterValue(knobIds[i]);
     input = params.getRawParameterValue("input");
     output = params.getRawParameterValue("output");
+    inputSource = params.getRawParameterValue("inputSource");
+    gate = params.getRawParameterValue("gate");
     metroOn = params.getRawParameterValue("metroOn");
     bpm = params.getRawParameterValue("bpm");
     beats = params.getRawParameterValue("beats");
@@ -172,6 +178,10 @@ void MJRAmpProcessor::prepareToPlay(double sr, int maxBlock)
     const juce::dsp::ProcessSpec spec { sr, (juce::uint32)maxBlock, 1 };
     for (auto& f : eq)
         f.prepare(spec), f.reset();
+    noiseGate.prepare(spec);
+    noiseGate.setRatio(10.0f);
+    noiseGate.setAttack(1.0f);
+    noiseGate.setRelease(120.0f);
     eqDb.fill(1e9f);
     updateFilters(); // first assignment sizes the coefficient arrays, later ones don't allocate
     for (auto& c : cab)
@@ -213,7 +223,10 @@ void MJRAmpProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     juce::ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
     const int numOut = getTotalNumOutputChannels();
-    float* mono = buffer.getWritePointer(0); // guitar is mono: channel 0 only
+    // Guitar is mono: the chosen input channel becomes channel 0, which the chain processes.
+    if (inputSource->load() > 0.5f && getTotalNumInputChannels() > 1)
+        buffer.copyFrom(0, 0, buffer, 1, 0, n);
+    float* mono = buffer.getWritePointer(0);
     inputPeak = std::max(inputPeak.load(), buffer.getMagnitude(0, 0, n));
     const bool tuning = tunerActive.load();
     if (tuning)
@@ -234,6 +247,13 @@ void MJRAmpProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         const float base = i ? baseline[4].load() : 0.5f * (baseline[4] + baseline[5]);
         driveDb = juce::jlimit(-24.0f, 24.0f, 3.0f * (now - base)); // ponytail: 3 dB per step, tune by ear
     }
+    if (const float threshold = gate->load(); threshold > -99.9f)
+    {
+        noiseGate.setThreshold(threshold);
+        juce::dsp::AudioBlock<float> block(&mono, 1, (size_t)n);
+        noiseGate.process(juce::dsp::ProcessContextReplacing<float>(block));
+    }
+
     driveGain.setTargetValue(juce::Decibels::decibelsToGain(input->load() + driveDb));
     driveGain.applyGain(mono, n);
 
