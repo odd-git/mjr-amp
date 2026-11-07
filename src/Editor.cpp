@@ -2,6 +2,7 @@
 // knobs), Cab view (four IR slots). Layout and colours are our own.
 #include "Processor.h"
 #include "BinaryData.h"
+#include "Pitch.h"
 
 namespace
 {
@@ -11,10 +12,10 @@ const juce::Colour bg { 0xff121212 }, bar { 0xff1b1b1b }, line { 0xff2c2c2c }, t
     dim { 0xff8a857a }, accent { 0xffd8b25a }, plate { 0xffe4d29b }, tolex { 0xff1e1d1b };
 }
 
-// Knob centres on the amp panel, as fractions of the panel image (1020 x 400).
-constexpr float knobX[6] = { 345, 440, 532, 622, 707, 790 };
-constexpr float knobY[6] = { 237, 245, 250, 256, 265, 271 };
-constexpr float panelW = 1020, panelH = 400, knobR = 38;
+// Knob centres on the amp head image (1034 x 390), same for the photo and the drawn head.
+constexpr float knobX[6] = { 413, 466.5f, 520, 574, 628, 682 };
+constexpr float knobY = 319.5f;
+constexpr float panelW = 1034, panelH = 390, knobR = 16;
 
 struct Look : juce::LookAndFeel_V4
 {
@@ -39,7 +40,7 @@ struct Look : juce::LookAndFeel_V4
         setColour(juce::TooltipWindow::textColourId, col::text);
     }
 
-    // Amp knobs ("amp" property): black skirted knob with a brushed cap, like the panel's.
+    // Amp knobs ("amp" property): chrome cap on a knurled brass ring, like the panel's.
     // Other rotaries: a thin arc.
     void drawRotarySlider(juce::Graphics& g, int x, int y, int w, int h, float pos, float start, float end, juce::Slider& s) override
     {
@@ -61,25 +62,27 @@ struct Look : juce::LookAndFeel_V4
             return;
         }
 
-        g.setColour(juce::Colours::black.withAlpha(0.45f)); // shadow
-        g.fillEllipse(juce::Rectangle<float>(rad * 2, rad * 2).withCentre(c.translated(rad * 0.08f, rad * 0.14f)));
+        g.setColour(juce::Colours::black.withAlpha(0.35f)); // shadow cast downwards, as on the panel
+        g.fillEllipse(juce::Rectangle<float>(rad * 1.8f, rad * 2.2f).withCentre(c.translated(0, rad * 0.45f)));
 
-        g.setGradientFill(juce::ColourGradient(juce::Colour(0xff3a3a3a), c.x - rad * 0.5f, c.y - rad * 0.6f,
-                                               juce::Colour(0xff050505), c.x + rad * 0.6f, c.y + rad, true));
+        g.setColour(juce::Colour(0xff6b5a2e)); // knurled brass ring
         g.fillEllipse(juce::Rectangle<float>(rad * 2, rad * 2).withCentre(c));
-        g.setColour(juce::Colour(0xff4a4a4a)); // knurled skirt
-        for (int i = 0; i < 36; ++i)
+        g.setColour(juce::Colour(0xff2e2614));
+        for (int i = 0; i < 40; ++i)
         {
-            const float t = (float)i * juce::MathConstants<float>::twoPi / 36.0f;
-            g.drawLine(juce::Line<float>(c.getPointOnCircumference(rad * 0.82f, t), c.getPointOnCircumference(rad * 0.97f, t)), 1.0f);
+            const float t = (float)i * juce::MathConstants<float>::twoPi / 40.0f;
+            g.drawLine(juce::Line<float>(c.getPointOnCircumference(rad * 0.8f, t), c.getPointOnCircumference(rad, t)), 0.8f);
         }
 
-        const float cap = rad * 0.55f;
-        g.setGradientFill(juce::ColourGradient(juce::Colour(0xfff2f2ee), c.x - cap, c.y - cap,
-                                               juce::Colour(0xff85857f), c.x + cap, c.y + cap, false));
+        const float cap = rad * 0.8f; // chrome cap with a spun-metal sheen
+        g.setGradientFill(juce::ColourGradient(juce::Colour(0xfff4f4f2), c.x - cap * 0.6f, c.y - cap * 0.8f,
+                                               juce::Colour(0xff7d7d7a), c.x + cap * 0.6f, c.y + cap, false));
         g.fillEllipse(juce::Rectangle<float>(cap * 2, cap * 2).withCentre(c));
-        g.setColour(juce::Colour(0xff111111));
-        g.drawLine(juce::Line<float>(c, c.getPointOnCircumference(cap * 0.95f, a)), juce::jmax(1.5f, rad * 0.06f));
+        g.setColour(juce::Colours::white.withAlpha(0.35f));
+        for (float t : { -2.4f, -0.8f, 0.7f, 2.3f })
+            g.drawLine(juce::Line<float>(c, c.getPointOnCircumference(cap * 0.95f, t)), juce::jmax(1.0f, rad * 0.08f));
+        g.setColour(juce::Colour(0xff1a1a1a));
+        g.drawLine(juce::Line<float>(c.getPointOnCircumference(cap * 0.2f, a), c.getPointOnCircumference(cap * 0.95f, a)), juce::jmax(1.5f, rad * 0.12f));
     }
 };
 
@@ -117,7 +120,7 @@ public:
     AmpView(MJRAmpProcessor& p)
     {
 #if MJR_HAS_PHOTO
-        photo = juce::ImageCache::getFromMemory(BinaryData::amp_jpg, BinaryData::amp_jpgSize);
+        photo = juce::ImageCache::getFromMemory(BinaryData::amp_png, BinaryData::amp_pngSize);
 #endif
         for (int i = 0; i < 6; ++i)
             addAndMakeVisible(*knobs.add(new Knob(p.params, MJRAmpProcessor::knobIds[i], true)));
@@ -141,27 +144,35 @@ public:
             g.drawImage(photo, area);
             return;
         }
-        // Drawn panel: tolex face with a gold control plate.
-        g.setColour(col::tolex);
-        g.fillRoundedRectangle(area, 6);
+        // Drawn head, same geometry as the photo: tolex box, piping, gold plate.
         const float sx = area.getWidth() / panelW, sy = area.getHeight() / panelH;
-        auto plate = juce::Rectangle<float>(20 * sx, 150 * sy, 960 * sx, 180 * sy) + area.getPosition();
-        g.setGradientFill(juce::ColourGradient(col::plate, plate.getX(), plate.getY(), col::plate.darker(0.25f), plate.getX(), plate.getBottom(), false));
-        g.fillRoundedRectangle(plate, 4);
+        auto at = [&](float x, float y, float w, float h) { return juce::Rectangle<float>(x * sx, y * sy, w * sx, h * sy) + area.getPosition(); };
+        g.setColour(col::tolex);
+        g.fillRoundedRectangle(area, 12 * sx);
+        g.setColour(col::accent.withAlpha(0.6f));
+        g.drawRoundedRectangle(at(22, 26, 990, 334), 4 * sx, 1.2f * sx);
+        g.drawHorizontalLine((int)at(0, 155, 0, 0).getY(), at(22, 0, 0, 0).getX(), at(1012, 0, 0, 0).getX());
+        g.setFont(juce::FontOptions(46.0f * sy, juce::Font::bold | juce::Font::italic));
+        g.setColour(col::plate);
+        g.drawText("MJR", at(367, 90, 300, 60), juce::Justification::centred);
+
+        const auto plate = at(222, 282, 590, 78);
+        g.setGradientFill(juce::ColourGradient(col::plate, plate.getX(), plate.getY(), col::plate.darker(0.3f), plate.getX(), plate.getBottom(), false));
+        g.fillRect(plate);
         g.setColour(juce::Colour(0xff3a3222));
-        g.setFont(juce::FontOptions(34.0f * sy, juce::Font::bold));
-        g.drawText("MJR", juce::Rectangle<float>(200 * sx, 60 * sy).withCentre({ plate.getX() + 140 * sx, plate.getCentreY() - 10 * sy }), juce::Justification::centred);
-        g.setFont(juce::FontOptions(12.0f * sy));
-        g.drawText("PLEXI-STYLE HEAD  100 W", juce::Rectangle<float>(200 * sx, 20 * sy).withCentre({ plate.getX() + 140 * sx, plate.getCentreY() + 22 * sy }), juce::Justification::centred);
-        g.setFont(juce::FontOptions(13.0f * sy));
+        g.setFont(juce::FontOptions(8.5f * sy));
         const char* names[] = { "PRESENCE", "BASS", "MIDDLE", "TREBLE", "VOLUME I", "VOLUME II" };
         for (int i = 0; i < 6; ++i)
-        {
-            const auto c = knobCentre(i);
-            g.drawText(names[i], juce::Rectangle<float>(120 * sx, 18 * sy).withCentre(c.translated(0, -54 * sy)), juce::Justification::centred);
-            g.drawText("0", juce::Rectangle<float>(20 * sx, 14 * sy).withCentre(c + juce::Point<float>(-30, 46) * sy), juce::Justification::centred);
-            g.drawText("10", juce::Rectangle<float>(20 * sx, 14 * sy).withCentre(c + juce::Point<float>(30, 46) * sy), juce::Justification::centred);
-        }
+            g.drawText(names[i], at(knobX[i] - 30, 288, 60, 10), juce::Justification::centred);
+        g.drawText("INPUTS", at(735, 316, 60, 10), juce::Justification::centred);
+        for (float x : { 735.0f, 790.0f })
+            for (float y : { 303.0f, 338.0f })
+            {
+                g.setColour(juce::Colour(0xff222222));
+                g.fillEllipse(at(x - 9, y - 9, 18, 18));
+                g.setColour(juce::Colour(0xff999999));
+                g.drawEllipse(at(x - 9, y - 9, 18, 18), 1.5f * sx);
+            }
     }
 
     void resized() override
@@ -169,7 +180,7 @@ public:
         const auto area = panelArea();
         const float s = area.getWidth() / panelW;
         for (int i = 0; i < 6; ++i)
-            knobs[i]->setBounds(juce::Rectangle<float>(knobR * 2.05f * s, knobR * 2.05f * s).withCentre(knobCentre(i)).toNearestInt());
+            knobs[i]->setBounds(juce::Rectangle<float>(knobR * 2.4f * s, knobR * 2.4f * s).withCentre(knobCentre(i)).toNearestInt());
         captured.setBounds(getLocalBounds().removeFromBottom(28));
         missing.setBounds(area.toNearestInt().removeFromTop((int)(area.getHeight() * 0.3f)));
     }
@@ -184,9 +195,7 @@ private:
     juce::Point<float> knobCentre(int i) const
     {
         const auto a = panelArea();
-        // The photo is in perspective; the drawn panel is flat and evenly spaced.
-        const float x = photo.isValid() ? knobX[i] : 330.0f + 92.0f * (float)i, y = photo.isValid() ? knobY[i] : 250.0f;
-        return { a.getX() + x / panelW * a.getWidth(), a.getY() + y / panelH * a.getHeight() };
+        return { a.getX() + knobX[i] / panelW * a.getWidth(), a.getY() + knobY / panelH * a.getHeight() };
     }
 
     juce::Image photo;
@@ -299,11 +308,150 @@ private:
     std::unique_ptr<juce::FileChooser> chooser;
 };
 
+class TunerView : public juce::Component, private juce::Timer
+{
+public:
+    TunerView(MJRAmpProcessor& proc) : p(proc) { buf.resize(4096); }
+
+    void visibilityChanged() override
+    {
+        p.tunerActive = isVisible();
+        isVisible() ? startTimerHz(20) : stopTimer();
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(col::bg);
+        auto r = getLocalBounds().reduced(40).withSizeKeepingCentre(std::min(getWidth() - 80, 640), 300);
+        const bool held = juce::Time::getMillisecondCounter() - lastSeen < 600;
+
+        g.setColour(held ? (std::abs(cents) < 3 ? col::accent : col::text) : col::line);
+        g.setFont(juce::FontOptions(110.0f, juce::Font::bold));
+        g.drawText(held ? note : "-", r.removeFromTop(130), juce::Justification::centred);
+        g.setFont(juce::FontOptions(16.0f));
+        g.setColour(col::dim);
+        g.drawText(held ? juce::String(hz, 1) + " Hz" : "Play a string", r.removeFromTop(30), juce::Justification::centred);
+
+        // Cents scale, -50..+50, needle on the detected deviation.
+        auto scale = r.removeFromTop(90).reduced(0, 20).toFloat();
+        for (int c = -50; c <= 50; c += 10)
+        {
+            const float x = scale.getX() + (float)(c + 50) / 100.0f * scale.getWidth();
+            g.setColour(c == 0 ? col::accent : col::line);
+            g.fillRect(juce::Rectangle<float>(c == 0 ? 3.0f : 2.0f, c == 0 ? scale.getHeight() : scale.getHeight() * 0.5f)
+                           .withCentre({ x, scale.getCentreY() }));
+        }
+        if (held)
+        {
+            const float x = scale.getX() + (juce::jlimit(-50.0f, 50.0f, cents) + 50.0f) / 100.0f * scale.getWidth();
+            g.setColour(std::abs(cents) < 3 ? col::accent : col::text);
+            g.fillRoundedRectangle(juce::Rectangle<float>(6, scale.getHeight() + 16).withCentre({ x, scale.getCentreY() }), 3);
+        }
+        g.setColour(col::dim);
+        g.setFont(juce::FontOptions(13.0f));
+        g.drawText("A4 = 440 Hz  -  output muted while tuning", r.removeFromTop(24), juce::Justification::centred);
+    }
+
+private:
+    void timerCallback() override
+    {
+        const int n = p.copyTunerInput(buf.data(), (int)buf.size());
+        const double f = detectPitch(buf.data(), n, p.getSampleRate());
+        if (f > 20 && f < 2000)
+        {
+            const double midi = 69 + 12 * std::log2(f / 440.0);
+            const int nearest = (int)std::lround(midi);
+            static const char* names[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+            const juce::String newNote = juce::String(names[nearest % 12]) + juce::String(nearest / 12 - 1);
+            const float newCents = (float)((midi - nearest) * 100.0);
+            cents = newNote == note ? cents + 0.4f * (newCents - cents) : newCents; // smooth the needle on a held note
+            note = newNote;
+            hz = f;
+            lastSeen = juce::Time::getMillisecondCounter();
+        }
+        repaint();
+    }
+
+    MJRAmpProcessor& p;
+    std::vector<float> buf;
+    juce::String note;
+    float cents = 0;
+    double hz = 0;
+    juce::uint32 lastSeen = 0;
+};
+
+class MetroPanel : public juce::Component
+{
+public:
+    MetroPanel(MJRAmpProcessor& proc)
+        : p(proc), onAtt(p.params, "metroOn", on), bpmAtt(p.params, "bpm", bpm), beatsAtt(p.params, "beats", beats),
+          level(p.params, "metroLevel", false)
+    {
+        on.setButtonText("Metronome");
+        bpm.setSliderStyle(juce::Slider::LinearHorizontal);
+        bpm.setTextBoxStyle(juce::Slider::TextBoxRight, false, 56, 24);
+        bpm.setTextValueSuffix(" BPM");
+        beats.setSliderStyle(juce::Slider::IncDecButtons);
+        beats.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 40, 24);
+        tap.setButtonText("Tap");
+        tap.onClick = [this] { tapTempo(); };
+        for (auto* l : { &beatsLabel, &levelLabel })
+            l->setColour(juce::Label::textColourId, col::dim);
+        beatsLabel.setText("Beats per bar", juce::dontSendNotification);
+        levelLabel.setText("Level", juce::dontSendNotification);
+        for (juce::Component* c : { (juce::Component*)&on, (juce::Component*)&bpm, (juce::Component*)&tap, (juce::Component*)&beats,
+                                    (juce::Component*)&level, (juce::Component*)&beatsLabel, (juce::Component*)&levelLabel })
+            addAndMakeVisible(c);
+        setSize(320, 170);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced(12);
+        on.setBounds(r.removeFromTop(26));
+        r.removeFromTop(8);
+        auto row = r.removeFromTop(28);
+        tap.setBounds(row.removeFromRight(56));
+        bpm.setBounds(row.withTrimmedRight(8));
+        r.removeFromTop(10);
+        row = r.removeFromTop(28);
+        beatsLabel.setBounds(row.removeFromLeft(110));
+        beats.setBounds(row.removeFromLeft(100));
+        r.removeFromTop(6);
+        row = r.removeFromTop(40);
+        levelLabel.setBounds(row.removeFromLeft(110));
+        level.setBounds(row.removeFromLeft(40));
+    }
+
+private:
+    void tapTempo()
+    {
+        const double now = juce::Time::getMillisecondCounterHiRes();
+        if (!taps.empty() && now - taps.back() > 2000)
+            taps.clear();
+        taps.push_back(now);
+        if (taps.size() > 5)
+            taps.erase(taps.begin());
+        if (taps.size() >= 2)
+            bpm.setValue(60000.0 * (double)(taps.size() - 1) / (taps.back() - taps.front()), juce::sendNotificationSync);
+    }
+
+    MJRAmpProcessor& p;
+    juce::ToggleButton on;
+    juce::Slider bpm, beats;
+    juce::TextButton tap;
+    juce::Label beatsLabel, levelLabel;
+    juce::AudioProcessorValueTreeState::ButtonAttachment onAtt;
+    juce::AudioProcessorValueTreeState::SliderAttachment bpmAtt, beatsAtt;
+    Knob level;
+    std::vector<double> taps;
+};
+
 class Editor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
     Editor(MJRAmpProcessor& proc)
-        : AudioProcessorEditor(proc), p(proc), amp(proc), cab(proc), input(proc.params, "input", false), output(proc.params, "output", false)
+        : AudioProcessorEditor(proc), p(proc), amp(proc), cab(proc), tuner(proc), input(proc.params, "input", false), output(proc.params, "output", false)
     {
         setLookAndFeel(&look);
         juce::LookAndFeel::setDefaultLookAndFeel(&look); // popups and choosers
@@ -338,6 +486,17 @@ public:
         resetKnobs.setTooltip("Set the knobs back to the capture's recorded settings");
         resetKnobs.onClick = [this] { p.resetKnobsToCapture(); };
 
+        tunerButton.setButtonText("TUNER");
+        tunerButton.setClickingTogglesState(true);
+        tunerButton.setTooltip("Tuner (mutes the output)");
+        tunerButton.onClick = [this] { showView(); };
+        metroButton.setButtonText("METRO");
+        metroButton.setTooltip("Metronome");
+        metroButton.onClick = [this]
+        {
+            juce::CallOutBox::launchAsynchronously(std::make_unique<MetroPanel>(p), getLocalArea(&metroButton, metroButton.getLocalBounds()), this);
+        };
+
         for (auto* t : { &ampTab, &cabTab })
         {
             t->setClickingTogglesState(true);
@@ -361,20 +520,22 @@ public:
         for (juce::Component* c : { (juce::Component*)&title, (juce::Component*)&level, (juce::Component*)&voicing,
                                     (juce::Component*)&library, (juce::Component*)&resetKnobs, (juce::Component*)&input,
                                     (juce::Component*)&output, (juce::Component*)&inMeter, (juce::Component*)&outMeter,
-                                    (juce::Component*)&amp, (juce::Component*)&cab })
+                                    (juce::Component*)&amp, (juce::Component*)&cab, (juce::Component*)&tuner,
+                                    (juce::Component*)&tunerButton, (juce::Component*)&metroButton })
             addAndMakeVisible(c);
         showView();
         refreshCapture();
 
         setResizable(true, true);
         setResizeLimits(800, 480, 1800, 1080);
-        getConstrainer()->setFixedAspectRatio(1100.0 / 640.0);
-        setSize(1100, 640);
+        getConstrainer()->setFixedAspectRatio(1200.0 / 700.0);
+        setSize(1200, 700);
         startTimerHz(30);
     }
 
     ~Editor() override
     {
+        p.tunerActive = false; // never leave the plugin muted when the window closes
         juce::LookAndFeel::setDefaultLookAndFeel(nullptr);
         setLookAndFeel(nullptr);
     }
@@ -388,6 +549,10 @@ public:
         g.setColour(col::line);
         g.drawHorizontalLine(topH, 0, (float)getWidth());
         g.drawHorizontalLine(getHeight() - navH, 0, (float)getWidth());
+
+        const bool lit = p.params.getRawParameterValue("metroOn")->load() > 0.5f && juce::Time::getMillisecondCounter() - beatLit < 110;
+        g.setColour(lit ? (downbeat ? col::accent : col::text) : col::line);
+        g.fillEllipse(beatLight.toFloat());
     }
 
     void resized() override
@@ -415,12 +580,19 @@ public:
         inLabel.setBounds(top.removeFromRight(28));
         top.removeFromRight(14);
         library.setBounds(top.removeFromRight(90));
+        top.removeFromRight(14);
+        beatLight = top.removeFromRight(10).withSizeKeepingCentre(10, 10);
+        top.removeFromRight(6);
+        metroButton.setBounds(top.removeFromRight(72));
+        top.removeFromRight(6);
+        tunerButton.setBounds(top.removeFromRight(72));
 
         auto nav = r.removeFromBottom(navH).withSizeKeepingCentre(260, navH - 14);
         ampTab.setBounds(nav.removeFromLeft(126));
         cabTab.setBounds(nav.removeFromRight(126));
         amp.setBounds(r);
         cab.setBounds(r);
+        tuner.setBounds(r);
     }
 
 private:
@@ -503,8 +675,10 @@ private:
 
     void showView()
     {
-        amp.setVisible(ampTab.getToggleState());
-        cab.setVisible(cabTab.getToggleState());
+        const bool tuning = tunerButton.getToggleState();
+        amp.setVisible(!tuning && ampTab.getToggleState());
+        cab.setVisible(!tuning && cabTab.getToggleState());
+        tuner.setVisible(tuning);
     }
 
     void timerCallback() override
@@ -522,6 +696,14 @@ private:
         };
         update(inMeter, p.inputPeak);
         update(outMeter, p.outputPeak);
+
+        if (const int beat = p.beatCount.load(); beat != shownBeat)
+        {
+            shownBeat = beat;
+            beatLit = juce::Time::getMillisecondCounter();
+            downbeat = p.beatInBar.load() == 0;
+        }
+        repaint(beatLight);
     }
 
     MJRAmpProcessor& p;
@@ -530,13 +712,17 @@ private:
     juce::Label title, inLabel, outLabel;
     juce::OwnedArray<juce::TextButton> channelButtons;
     juce::ComboBox level, voicing;
-    juce::TextButton library, resetKnobs, ampTab, cabTab;
+    juce::TextButton library, resetKnobs, ampTab, cabTab, tunerButton, metroButton;
     AmpView amp;
     CabView cab;
+    TunerView tuner;
     Knob input, output;
     Meter inMeter, outMeter;
     std::unique_ptr<juce::FileChooser> chooser;
-    int shownCapture = -1;
+    int shownCapture = -1, shownBeat = 0;
+    juce::uint32 beatLit = 0;
+    bool downbeat = false;
+    juce::Rectangle<int> beatLight;
     bool updating = false;
 };
 } // namespace

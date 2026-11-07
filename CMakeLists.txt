@@ -31,8 +31,8 @@ juce_add_plugin(MJRAmp
 
 # The amp photo is not ours to publish: used only if present locally, otherwise a drawn panel.
 set(MJR_DATA data/captures.json)
-if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/assets-local/amp.jpg)
-    list(APPEND MJR_DATA assets-local/amp.jpg)
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/assets-local/amp.png)
+    list(APPEND MJR_DATA assets-local/amp.png)
     set(MJR_HAS_PHOTO 1)
 else()
     set(MJR_HAS_PHOTO 0)

@@ -58,6 +58,14 @@ public:
     juce::AudioProcessorValueTreeState params;
     std::atomic<float> inputPeak { 0 }, outputPeak { 0 };
 
+    // Tuner: while active the amp is muted and the dry input is kept for analysis.
+    std::atomic<bool> tunerActive { false };
+    int copyTunerInput(float* dest, int n) const; // latest n input samples; returns how many
+    double getSampleRate() const { return sampleRate; }
+
+    // Metronome: beat counter for the editor's light (beat number, 0 = downbeat).
+    std::atomic<int> beatCount { 0 }, beatInBar { 0 };
+
 private:
     void timerCallback() override { poll(); }
     void loadCapture(int index, bool resetKnobs);
@@ -79,7 +87,16 @@ private:
     juce::AudioBuffer<float> dry, slotBuf;
 
     std::array<std::atomic<float>*, 6> knob {};
-    std::atomic<float> *input, *output;
+    std::atomic<float> *input, *output, *metroOn, *bpm, *beats, *metroLevel;
+
+    void addMetronome(juce::AudioBuffer<float>&, int numOut);
+    double metroSamples = 0; // free-running position, in samples since the last beat
+    int metroBeat = -1;
+    int clickPos = 1 << 30;
+    float clickFreq = 1000;
+
+    std::vector<float> tunerRing = std::vector<float>(1 << 14);
+    std::atomic<int> tunerWrite { 0 };
     std::array<std::atomic<float>*, numIrSlots> irOn {}, irLevel {}, irPan {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MJRAmpProcessor)

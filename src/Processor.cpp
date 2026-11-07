@@ -62,6 +62,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout(const std::vector
         l.add(std::make_unique<AudioParameterFloat>(ParameterID { p + "Pan", 1 }, "IR " + String(s) + " Pan",
                                                     NormalisableRange<float>(-1.0f, 1.0f, 0.01f), 0.0f));
     }
+    l.add(std::make_unique<AudioParameterBool>(ParameterID { "metroOn", 1 }, "Metronome", false));
+    l.add(std::make_unique<AudioParameterFloat>(ParameterID { "bpm", 1 }, "Tempo", NormalisableRange<float>(30.0f, 300.0f, 1.0f), 120.0f,
+                                                AudioParameterFloatAttributes().withLabel("BPM")));
+    l.add(std::make_unique<AudioParameterInt>(ParameterID { "beats", 1 }, "Beats per bar", 1, 12, 4));
+    l.add(db("metroLevel", "Metronome Level", -36.0f, 0.0f, -12.0f));
     return l;
 }
 } // namespace
@@ -76,6 +81,10 @@ MJRAmpProcessor::MJRAmpProcessor()
         knob[(size_t)i] = params.getRawParameterValue(knobIds[i]);
     input = params.getRawParameterValue("input");
     output = params.getRawParameterValue("output");
+    metroOn = params.getRawParameterValue("metroOn");
+    bpm = params.getRawParameterValue("bpm");
+    beats = params.getRawParameterValue("beats");
+    metroLevel = params.getRawParameterValue("metroLevel");
     for (int s = 0; s < numIrSlots; ++s)
     {
         const juce::String p = "ir" + juce::String(s + 1);
@@ -206,6 +215,14 @@ void MJRAmpProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     const int numOut = getTotalNumOutputChannels();
     float* mono = buffer.getWritePointer(0); // guitar is mono: channel 0 only
     inputPeak = std::max(inputPeak.load(), buffer.getMagnitude(0, 0, n));
+    const bool tuning = tunerActive.load();
+    if (tuning)
+    {
+        const int mask = (int)tunerRing.size() - 1, w = tunerWrite.load();
+        for (int i = 0; i < n; ++i)
+            tunerRing[(size_t)((w + i) & mask)] = mono[i];
+        tunerWrite.store((w + n) & mask);
+    }
 
     // Volume knobs drive the capture harder or softer than it was recorded.
     const int cap = loadedCapture;
@@ -267,7 +284,78 @@ void MJRAmpProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     }
     for (int ch = numOut; ch < buffer.getNumChannels(); ++ch)
         buffer.clear(ch, 0, n);
+    if (tuning) // silent tuning; the metronome keeps playing
+        for (int ch = 0; ch < numOut; ++ch)
+            buffer.clear(ch, 0, n);
+    addMetronome(buffer, numOut);
     outputPeak = std::max(outputPeak.load(), buffer.getMagnitude(0, n));
+}
+
+int MJRAmpProcessor::copyTunerInput(float* dest, int n) const
+{
+    const int size = (int)tunerRing.size(), mask = size - 1;
+    n = std::min(n, size);
+    const int end = tunerWrite.load();
+    for (int i = 0; i < n; ++i) // ponytail: may tear against the writer for one block; harmless for a tuner
+        dest[i] = tunerRing[(size_t)((end - n + i + size) & mask)];
+    return n;
+}
+
+void MJRAmpProcessor::addMetronome(juce::AudioBuffer<float>& buffer, int numOut)
+{
+    const int n = buffer.getNumSamples();
+    if (metroOn->load() < 0.5f)
+    {
+        metroBeat = -1;
+        metroSamples = 0;
+        clickPos = 1 << 30;
+        return;
+    }
+
+    // Follow the host while its transport runs; otherwise free-running at our tempo.
+    double tempo = bpm->load(), ppq = -1, barStart = 0;
+    int perBar = (int)beats->load();
+    if (auto* ph = getPlayHead())
+        if (auto pos = ph->getPosition(); pos && pos->getIsPlaying() && pos->getPpqPosition())
+        {
+            ppq = *pos->getPpqPosition();
+            tempo = pos->getBpm().orFallback(tempo);
+            barStart = pos->getPpqPositionOfLastBarStart().orFallback(0.0);
+            if (auto ts = pos->getTimeSignature())
+                perBar = ts->numerator;
+        }
+    const double samplesPerBeat = sampleRate * 60.0 / tempo;
+    const float gain = juce::Decibels::decibelsToGain(metroLevel->load());
+    const int clickLen = (int)(0.03 * sampleRate);
+
+    for (int i = 0; i < n; ++i)
+    {
+        int beat;
+        if (ppq >= 0)
+            beat = (int)std::floor(ppq + i / samplesPerBeat - barStart);
+        else
+        {
+            if (metroBeat >= 0 && (metroSamples += 1.0) >= samplesPerBeat)
+                metroSamples -= samplesPerBeat;
+            beat = metroSamples < 1.0 ? metroBeat + 1 : metroBeat;
+        }
+        if (beat != metroBeat)
+        {
+            metroBeat = beat;
+            const int inBar = ((beat % perBar) + perBar) % perBar;
+            clickPos = 0;
+            clickFreq = inBar == 0 ? 1600.0f : 1000.0f;
+            beatInBar = inBar;
+            ++beatCount;
+        }
+        if (clickPos < clickLen)
+        {
+            const float t = (float)clickPos++ / (float)sampleRate;
+            const float v = gain * std::sin(juce::MathConstants<float>::twoPi * clickFreq * t) * std::exp(-t / 0.006f);
+            for (int ch = 0; ch < numOut; ++ch)
+                buffer.getWritePointer(ch)[i] += v;
+        }
+    }
 }
 
 void MJRAmpProcessor::getStateInformation(juce::MemoryBlock& dest)

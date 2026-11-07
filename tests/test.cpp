@@ -1,5 +1,6 @@
 // Headless checks. Usage: mjr-test <capture library dir> <DI wav>
 #include "../src/Processor.h"
+#include "../src/Pitch.h"
 #include <iostream>
 
 static int failures = 0;
@@ -154,6 +155,61 @@ int main(int argc, char** argv)
         CHECK(b.getIrFile(2) == a.getIrFile(0), "IR file not restored");
     }
 
+    // 6. Tuner: guitar-like tones (fundamental + harmonics) within 1 cent.
+    for (double f : { 61.74, 82.41, 110.0, 146.83, 196.0, 246.94, 329.63, 440.0, 987.77 })
+        for (double sr : { 44100.0, 48000.0, 96000.0 })
+        {
+            std::vector<float> x(4096);
+            for (size_t i = 0; i < x.size(); ++i)
+            {
+                const double t = (double)i / sr, w = juce::MathConstants<double>::twoPi * f * t;
+                x[i] = (float)(0.3 * std::sin(w) + 0.2 * std::sin(2 * w + 0.5) + 0.1 * std::sin(3 * w + 1.0));
+            }
+            const double got = detectPitch(x.data(), (int)x.size(), sr);
+            const double cents = got > 0 ? 1200 * std::log2(got / f) : 1e9;
+            CHECK(std::abs(cents) < 1.0, "tuner " << f << " Hz @ " << sr << ": got " << got);
+        }
+    {
+        std::vector<float> quiet(4096, 0.0f);
+        CHECK(detectPitch(quiet.data(), 4096, 48000) == 0, "tuner finds pitch in silence");
+    }
+
+    // 7. Metronome: free-running clicks on the beat, accent on the downbeat; tuner mutes the amp only.
+    {
+        MJRAmpProcessor p;
+        p.setLibraryDir(lib);
+        for (int s = 1; s <= MJRAmpProcessor::numIrSlots; ++s)
+            setParam(p, ("ir" + juce::String(s) + "On").toRawUTF8(), 0.0f);
+        p.prepareToPlay(48000, block);
+        waitIdle(p, block);
+        setParam(p, "metroOn", 1.0f);
+        setParam(p, "bpm", 120.0f);
+        setParam(p, "beats", 4.0f);
+        setParam(p, "metroLevel", 0.0f);
+        p.tunerActive = true;
+
+        juce::AudioBuffer<float> buf(2, 48000 * 2 + 100);
+        buf.clear();
+        buf.copyFrom(0, 0, di, 0, di.getNumSamples() / 2, 48000); // guitar playing: must not be heard
+        const int before = p.beatCount;
+        run(p, buf, block);
+        std::vector<int> onsets;
+        for (int i = 0, last = -100000; i < buf.getNumSamples(); ++i)
+            if (std::abs(buf.getSample(0, i)) > 0.05f && i - last > 1000)
+                onsets.push_back(i), last = i;
+        std::cout << "metronome onsets:";
+        for (int o : onsets)
+            std::cout << " " << o;
+        std::cout << "\n";
+        CHECK(onsets.size() == 5, "expected 5 clicks in 2 s at 120 BPM, got " << onsets.size());
+        for (size_t k = 0; k < onsets.size(); ++k)
+            CHECK(std::abs(onsets[k] - (int)k * 24000) < 10, "click " << k << " off the beat: " << onsets[k]);
+        CHECK(p.beatCount - before == 5, "beat counter");
+        CHECK(p.beatInBar == 0, "fifth click should be a downbeat");
+        float tunerBuf[512];
+        CHECK(p.copyTunerInput(tunerBuf, 512) == 512, "tuner input");
+    }
+
     // 5. Optional: editor snapshots, mjr-test <lib> <DI> <out dir>
     if (argc > 3)
     {
@@ -174,6 +230,10 @@ int main(int argc, char** argv)
             if (auto* b = dynamic_cast<juce::TextButton*>(c); b != nullptr && b->getButtonText() == "CAB")
                 b->setToggleState(true, juce::dontSendNotification), b->onClick();
         save("cab.png");
+        for (auto* c : ed->getChildren())
+            if (auto* b = dynamic_cast<juce::TextButton*>(c); b != nullptr && b->getButtonText() == "TUNER")
+                b->setToggleState(true, juce::dontSendNotification), b->onClick();
+        save("tuner.png");
         std::cout << "snapshots in " << outDir.getFullPathName() << "\n";
     }
 
