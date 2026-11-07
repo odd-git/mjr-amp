@@ -225,14 +225,20 @@ int main(int argc, char** argv)
             os.setPosition(0), os.truncate();
             juce::PNGImageFormat().writeImageToStream(ed->createComponentSnapshot(ed->getLocalBounds(), true, 1.0f), os);
         };
-        save("amp.png");
-        for (auto* c : ed->getChildren())
-            if (auto* b = dynamic_cast<juce::TextButton*>(c); b != nullptr && b->getButtonText() == "CAB")
-                b->setToggleState(true, juce::dontSendNotification), b->onClick();
-        save("cab.png");
-        for (auto* c : ed->getChildren())
-            if (auto* b = dynamic_cast<juce::TextButton*>(c); b != nullptr && b->getButtonText() == "TUNER")
-                b->setToggleState(true, juce::dontSendNotification), b->onClick();
+        save("main.png");
+        std::function<juce::Button*(juce::Component*)> find = [&](juce::Component* c) -> juce::Button*
+        {
+            for (auto* ch : c->getChildren())
+            {
+                if (auto* b = dynamic_cast<juce::Button*>(ch); b != nullptr && b->getButtonText() == "TUNER")
+                    return b;
+                if (auto* b = find(ch))
+                    return b;
+            }
+            return nullptr;
+        };
+        if (auto* b = find(ed.get()))
+            b->setToggleState(true, juce::dontSendNotification), b->onClick();
         save("tuner.png");
         std::cout << "snapshots in " << outDir.getFullPathName() << "\n";
     }

@@ -52,13 +52,18 @@ struct Look : juce::LookAndFeel_V4
         if (!s.getProperties().contains("amp"))
         {
             juce::Path track, fill;
-            track.addCentredArc(c.x, c.y, rad - 3, rad - 3, 0, start, end, true);
-            fill.addCentredArc(c.x, c.y, rad - 3, rad - 3, 0, start, a, true);
-            g.setColour(col::line);
-            g.strokePath(track, juce::PathStrokeType(3, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-            g.setColour(col::accent);
-            g.strokePath(fill, juce::PathStrokeType(3, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-            g.fillEllipse(juce::Rectangle<float>(5, 5).withCentre(c.getPointOnCircumference(rad - 3, a)));
+            track.addCentredArc(c.x, c.y, rad - 2, rad - 2, 0, start, end, true);
+            fill.addCentredArc(c.x, c.y, rad - 2, rad - 2, 0, start, a, true);
+            g.setColour(juce::Colour(0xff3a3a3a));
+            g.strokePath(track, juce::PathStrokeType(4, juce::PathStrokeType::curved, juce::PathStrokeType::butt));
+            g.setColour(juce::Colour(0xffb8b8b8));
+            g.strokePath(fill, juce::PathStrokeType(4, juce::PathStrokeType::curved, juce::PathStrokeType::butt));
+            const float ring = rad * 0.72f;
+            g.setColour(juce::Colour(0xff0c0c0c));
+            g.fillEllipse(juce::Rectangle<float>(ring * 2, ring * 2).withCentre(c));
+            g.setColour(juce::Colours::white);
+            g.drawEllipse(juce::Rectangle<float>(ring * 2, ring * 2).withCentre(c), juce::jmax(2.0f, rad * 0.07f));
+            g.fillEllipse(juce::Rectangle<float>(rad * 0.13f, rad * 0.13f).withCentre(c.getPointOnCircumference(ring * 0.72f, a)));
             return;
         }
 
@@ -114,37 +119,200 @@ struct Meter : juce::Component
     }
 };
 
-class AmpView : public juce::Component
+// A knob with its name and current value underneath.
+struct LabeledKnob : juce::Component
+{
+    LabeledKnob(juce::AudioProcessorValueTreeState& params, const juce::String& id, const juce::String& name)
+        : knob(params, id, false), unit(params.getParameter(id)->getLabel())
+    {
+        label.setText(name, juce::dontSendNotification);
+        for (auto* l : { &label, &value })
+        {
+            l->setJustificationType(juce::Justification::centred);
+            addAndMakeVisible(*l);
+        }
+        label.setColour(juce::Label::textColourId, col::text);
+        label.setFont(juce::FontOptions(12.0f, juce::Font::bold));
+        value.setColour(juce::Label::textColourId, col::dim);
+        value.setFont(juce::FontOptions(12.0f));
+        knob.onValueChange = [this] { showValue(); };
+        addAndMakeVisible(knob);
+        showValue();
+    }
+    void showValue() { value.setText(knob.getTextFromValue(knob.getValue()) + (unit.isEmpty() ? "" : " " + unit), juce::dontSendNotification); }
+    void resized() override
+    {
+        auto r = getLocalBounds();
+        value.setBounds(r.removeFromBottom(16));
+        label.setBounds(r.removeFromBottom(16));
+        knob.setBounds(r.withSizeKeepingCentre(std::min(r.getWidth(), r.getHeight()), std::min(r.getWidth(), r.getHeight())));
+    }
+    Knob knob;
+    juce::Label label, value;
+    juce::String unit;
+};
+
+// Top-bar button: drawn icon with its caption underneath.
+struct IconButton : juce::Button
+{
+    enum Icon { tuner, metronome, folder };
+    IconButton(const juce::String& caption, Icon i) : juce::Button(caption), icon(i) {}
+    bool lit = false; // metronome beat light
+    bool downbeat = false;
+
+    void paintButton(juce::Graphics& g, bool over, bool down) override
+    {
+        auto r = getLocalBounds().toFloat();
+        const auto c = getToggleState() ? col::accent : (over ? juce::Colours::white : col::text);
+        g.setColour(down ? c.darker(0.3f) : c);
+        g.setFont(juce::FontOptions(11.0f, juce::Font::bold));
+        g.drawText(getName(), r.removeFromBottom(16), juce::Justification::centred);
+        const auto b = r.withSizeKeepingCentre(30, 30);
+        juce::Path p;
+        switch (icon)
+        {
+            case tuner: // tuning fork
+                p.startNewSubPath(b.getX() + 8, b.getY());
+                p.lineTo(b.getX() + 8, b.getY() + 14);
+                p.quadraticTo(b.getCentreX(), b.getY() + 24, b.getRight() - 8, b.getY() + 14);
+                p.lineTo(b.getRight() - 8, b.getY());
+                p.startNewSubPath(b.getCentreX(), b.getY() + 19);
+                p.lineTo(b.getCentreX(), b.getBottom());
+                break;
+            case metronome:
+                p.startNewSubPath(b.getX() + 11, b.getY());
+                p.lineTo(b.getRight() - 11, b.getY());
+                p.lineTo(b.getRight() - 4, b.getBottom());
+                p.lineTo(b.getX() + 4, b.getBottom());
+                p.closeSubPath();
+                p.startNewSubPath(b.getCentreX(), b.getBottom() - 6);
+                p.lineTo(b.getRight() - 6, b.getY() + 4);
+                break;
+            case folder:
+                p.startNewSubPath(b.getX() + 1, b.getY() + 5);
+                p.lineTo(b.getX() + 11, b.getY() + 5);
+                p.lineTo(b.getX() + 14, b.getY() + 9);
+                p.lineTo(b.getRight() - 1, b.getY() + 9);
+                p.lineTo(b.getRight() - 1, b.getBottom() - 3);
+                p.lineTo(b.getX() + 1, b.getBottom() - 3);
+                p.closeSubPath();
+                break;
+        }
+        g.strokePath(p, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        if (lit)
+        {
+            g.setColour(downbeat ? col::accent : juce::Colours::white);
+            g.fillEllipse(juce::Rectangle<float>(7, 7).withCentre({ b.getRight() + 6, b.getY() + 2 }));
+        }
+    }
+    Icon icon;
+};
+
+// The rig: amp head (photo or drawn) standing on a drawn cabinet. The cabinet's top band
+// names each amp knob and shows its value, right under the knob.
+class Rig : public juce::Component
 {
 public:
-    AmpView(MJRAmpProcessor& p)
+    Rig(MJRAmpProcessor& p)
     {
 #if MJR_HAS_PHOTO
         photo = juce::ImageCache::getFromMemory(BinaryData::amp_png, BinaryData::amp_pngSize);
 #endif
         for (int i = 0; i < 6; ++i)
-            addAndMakeVisible(*knobs.add(new Knob(p.params, MJRAmpProcessor::knobIds[i], true)));
-        for (auto* l : { &captured, &missing })
         {
-            l->setJustificationType(juce::Justification::centred);
-            addAndMakeVisible(*l);
+            auto* k = knobs.add(new Knob(p.params, MJRAmpProcessor::knobIds[i], true));
+            k->onValueChange = [this] { repaint(band.toNearestInt()); };
+            addAndMakeVisible(k);
         }
-        captured.setColour(juce::Label::textColourId, col::dim);
+        missing.setJustificationType(juce::Justification::centred);
         missing.setColour(juce::Label::textColourId, col::accent);
+        missing.setColour(juce::Label::backgroundColourId, col::bg.withAlpha(0.85f));
+        addChildComponent(missing);
     }
 
-    juce::Label captured, missing;
+    juce::Label missing;
 
     void paint(juce::Graphics& g) override
     {
-        g.fillAll(col::bg);
-        const auto area = panelArea();
+        paintCab(g);
+        const auto area = head();
         if (photo.isValid())
-        {
             g.drawImage(photo, area);
-            return;
+        else
+            paintDrawnHead(g, area);
+
+        const char* names[] = { "PRESENCE", "BASS", "MIDDLE", "TREBLE", "VOL I", "VOL II" };
+        for (int i = 0; i < 6; ++i)
+        {
+            const float x = knobCentre(i).x;
+            g.setColour(col::text);
+            g.setFont(juce::FontOptions(9.5f, juce::Font::bold));
+            g.drawText(names[i], juce::Rectangle<float>(60, 14).withCentre({ x, band.getY() + 13 }), juce::Justification::centred);
+            g.setColour(col::accent);
+            g.setFont(juce::FontOptions(12.0f));
+            g.drawText(juce::String(knobs[i]->getValue(), 1), juce::Rectangle<float>(60, 14).withCentre({ x, band.getY() + 28 }), juce::Justification::centred);
         }
-        // Drawn head, same geometry as the photo: tolex box, piping, gold plate.
+    }
+
+    void resized() override
+    {
+        const auto area = head();
+        const float s = area.getWidth() / panelW;
+        for (int i = 0; i < 6; ++i)
+            knobs[i]->setBounds(juce::Rectangle<float>(knobR * 2.4f * s, knobR * 2.4f * s).withCentre(knobCentre(i)).toNearestInt());
+        band = { area.getX() + 40, area.getBottom() + 8, area.getWidth() - 80, 40 };
+        missing.setBounds(area.reduced(area.getWidth() * 0.25f, area.getHeight() * 0.3f).toNearestInt());
+    }
+
+private:
+    juce::Rectangle<float> head() const
+    {
+        const float w = (float)getWidth();
+        return { 0, 0, w, w * panelH / panelW };
+    }
+    juce::Point<float> knobCentre(int i) const
+    {
+        const auto a = head();
+        return { a.getX() + knobX[i] / panelW * a.getWidth(), a.getY() + knobY / panelH * a.getHeight() };
+    }
+
+    void paintCab(juce::Graphics& g)
+    {
+        auto cab = getLocalBounds().toFloat().withTop(head().getBottom()).reduced(14, 0).withTrimmedBottom(-20);
+        g.setColour(juce::Colour(0xff151515));
+        g.fillRoundedRectangle(cab, 10);
+        g.setColour(juce::Colour(0xff2e2e2e));
+        g.drawRoundedRectangle(cab.reduced(1), 10, 2);
+
+        // Grille cloth: dark basket weave with a soft light from the top.
+        auto grille = cab.reduced(30).withTrimmedTop(32);
+        g.setColour(juce::Colour(0xff26231f));
+        g.fillRect(grille);
+        g.saveState();
+        g.reduceClipRegion(grille.toNearestInt());
+        g.setColour(juce::Colour(0xff36322b));
+        for (float x = grille.getX() - grille.getHeight(); x < grille.getRight(); x += 5)
+        {
+            g.drawLine(x, grille.getY(), x + grille.getHeight(), grille.getBottom(), 1.0f);
+            g.drawLine(x + grille.getHeight(), grille.getY(), x, grille.getBottom(), 1.0f);
+        }
+        g.setGradientFill(juce::ColourGradient(juce::Colours::transparentBlack, grille.getCentreX(), grille.getY() + grille.getHeight() * 0.3f,
+                                               juce::Colours::black.withAlpha(0.75f), grille.getX(), grille.getBottom(), true));
+        g.fillRect(grille);
+        g.restoreState();
+        g.setColour(col::accent.withAlpha(0.35f)); // piping
+        g.drawRect(grille.expanded(3), 1.5f);
+
+        for (auto corner : { cab.getTopLeft(), cab.getTopRight() }) // metal corner protectors
+        {
+            auto r = juce::Rectangle<float>(34, 34).withCentre(corner.translated(corner.x < cab.getCentreX() ? 14 : -14, 14));
+            g.setGradientFill(juce::ColourGradient(juce::Colour(0xff5a5a5a), r.getX(), r.getY(), juce::Colour(0xff1c1c1c), r.getRight(), r.getBottom(), false));
+            g.fillRoundedRectangle(r, 7);
+        }
+    }
+
+    void paintDrawnHead(juce::Graphics& g, juce::Rectangle<float> area)
+    {
         const float sx = area.getWidth() / panelW, sy = area.getHeight() / panelH;
         auto at = [&](float x, float y, float w, float h) { return juce::Rectangle<float>(x * sx, y * sy, w * sx, h * sy) + area.getPosition(); };
         g.setColour(col::tolex);
@@ -161,9 +329,6 @@ public:
         g.fillRect(plate);
         g.setColour(juce::Colour(0xff3a3222));
         g.setFont(juce::FontOptions(8.5f * sy));
-        const char* names[] = { "PRESENCE", "BASS", "MIDDLE", "TREBLE", "VOLUME I", "VOLUME II" };
-        for (int i = 0; i < 6; ++i)
-            g.drawText(names[i], at(knobX[i] - 30, 288, 60, 10), juce::Justification::centred);
         g.drawText("INPUTS", at(735, 316, 60, 10), juce::Justification::centred);
         for (float x : { 735.0f, 790.0f })
             for (float y : { 303.0f, 338.0f })
@@ -175,136 +340,113 @@ public:
             }
     }
 
-    void resized() override
-    {
-        const auto area = panelArea();
-        const float s = area.getWidth() / panelW;
-        for (int i = 0; i < 6; ++i)
-            knobs[i]->setBounds(juce::Rectangle<float>(knobR * 2.4f * s, knobR * 2.4f * s).withCentre(knobCentre(i)).toNearestInt());
-        captured.setBounds(getLocalBounds().removeFromBottom(28));
-        missing.setBounds(area.toNearestInt().removeFromTop((int)(area.getHeight() * 0.3f)));
-    }
-
-private:
-    juce::Rectangle<float> panelArea() const
-    {
-        auto r = getLocalBounds().toFloat().reduced(16, 30);
-        return r.withSizeKeepingCentre(std::min(r.getWidth(), r.getHeight() * panelW / panelH),
-                                       std::min(r.getHeight(), r.getWidth() * panelH / panelW));
-    }
-    juce::Point<float> knobCentre(int i) const
-    {
-        const auto a = panelArea();
-        return { a.getX() + knobX[i] / panelW * a.getWidth(), a.getY() + knobY / panelH * a.getHeight() };
-    }
-
     juce::Image photo;
     juce::OwnedArray<Knob> knobs;
+    juce::Rectangle<float> band;
 };
 
-class CabView : public juce::Component
+// One IR slot: file picker with arrows through its folder, level, pan, active.
+class IrBlock : public juce::Component
 {
 public:
-    CabView(MJRAmpProcessor& proc) : p(proc)
+    IrBlock(MJRAmpProcessor& proc, int s)
+        : p(proc), slot(s), id("ir" + juce::String(s + 1)), level(p.params, id + "Level", "LEVEL"), pan(p.params, id + "Pan", "PAN"),
+          activeAtt(p.params, id + "On", active)
     {
-        for (int s = 0; s < MJRAmpProcessor::numIrSlots; ++s)
-        {
-            auto& sl = *slots.add(new Slot);
-            const juce::String id = "ir" + juce::String(s + 1);
-            sl.title.setText("IR " + juce::String(s + 1), juce::dontSendNotification);
-            sl.title.setColour(juce::Label::textColourId, col::accent);
-            sl.on = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(p.params, id + "On", sl.power);
-            sl.power.setButtonText("On");
-            sl.level = std::make_unique<Knob>(p.params, id + "Level", false);
-            sl.pan = std::make_unique<Knob>(p.params, id + "Pan", false);
-            sl.file.onClick = [this, s] { choose(s); };
-            sl.file.setTooltip("Load an impulse response (.wav)");
-            for (juce::Component* c : { (juce::Component*)&sl.title, (juce::Component*)&sl.power, (juce::Component*)&sl.file,
-                                        (juce::Component*)sl.level.get(), (juce::Component*)sl.pan.get(), (juce::Component*)&sl.levelLabel,
-                                        (juce::Component*)&sl.panLabel })
-                addAndMakeVisible(c);
-            sl.levelLabel.setText("LEVEL", juce::dontSendNotification);
-            sl.panLabel.setText("PAN", juce::dontSendNotification);
-            for (auto* l : { &sl.levelLabel, &sl.panLabel })
-            {
-                l->setJustificationType(juce::Justification::centred);
-                l->setColour(juce::Label::textColourId, col::dim);
-            }
-        }
+        title.setText("IR " + juce::String(s + 1), juce::dontSendNotification);
+        title.setColour(juce::Label::textColourId, col::accent);
+        title.setFont(juce::FontOptions(12.0f, juce::Font::bold));
+        active.setButtonText("ACTIVE");
+        prev.setButtonText("<");
+        next.setButtonText(">");
+        prev.onClick = [this] { step(-1); };
+        next.onClick = [this] { step(1); };
+        files.onChange = [this] { picked(); };
+        files.setTooltip("Impulse response for this slot");
+        for (juce::Component* c : { (juce::Component*)&title, (juce::Component*)&prev, (juce::Component*)&next, (juce::Component*)&files,
+                                    (juce::Component*)&level, (juce::Component*)&pan, (juce::Component*)&active })
+            addAndMakeVisible(c);
         refresh();
     }
 
     void refresh()
     {
-        for (int s = 0; s < slots.size(); ++s)
-        {
-            const auto f = p.getIrFile(s);
-            slots[s]->file.setButtonText(f.existsAsFile() ? f.getFileNameWithoutExtension() : "Load IR...");
-        }
-    }
-
-    void paint(juce::Graphics& g) override
-    {
-        g.fillAll(col::bg);
-        for (auto* sl : slots)
-        {
-            g.setColour(col::bar);
-            g.fillRoundedRectangle(sl->card.toFloat(), 8);
-            g.setColour(col::line);
-            g.drawRoundedRectangle(sl->card.toFloat(), 8, 1);
-        }
+        const auto cur = p.getIrFile(slot);
+        const auto dir = cur.existsAsFile() ? cur.getParentDirectory() : p.getLibraryDir();
+        list = dir.findChildFiles(juce::File::findFiles, false, "*.wav;*.aif;*.aiff;*.flac");
+        list.sort();
+        files.clear(juce::dontSendNotification);
+        for (int i = 0; i < list.size(); ++i)
+            files.addItem(list[i].getFileNameWithoutExtension(), i + 1);
+        files.addSeparator();
+        files.addItem("Browse...", browseId);
+        files.addItem("Empty", emptyId);
+        const int idx = list.indexOf(cur);
+        if (idx >= 0)
+            files.setSelectedId(idx + 1, juce::dontSendNotification);
+        else
+            files.setText(cur.existsAsFile() ? cur.getFileNameWithoutExtension() : "Empty", juce::dontSendNotification);
     }
 
     void resized() override
     {
-        auto r = getLocalBounds().reduced(24, 40);
-        const int w = (r.getWidth() - 3 * 16) / 4;
-        r = r.withSizeKeepingCentre(r.getWidth(), std::min(r.getHeight(), w + 90));
-        for (auto* sl : slots)
-        {
-            sl->card = r.removeFromLeft(w);
-            r.removeFromLeft(16);
-            auto c = sl->card.reduced(14);
-            auto top = c.removeFromTop(28);
-            sl->power.setBounds(top.removeFromRight(56));
-            sl->title.setBounds(top);
-            c.removeFromTop(10);
-            sl->file.setBounds(c.removeFromTop(30));
-            c.removeFromTop(20);
-            auto knobs = c.removeFromTop(std::min(c.getHeight() - 20, w / 2 - 10));
-            auto labels = c.removeFromTop(20);
-            sl->level->setBounds(knobs.removeFromLeft(knobs.getWidth() / 2).reduced(8));
-            sl->pan->setBounds(knobs.reduced(8));
-            sl->levelLabel.setBounds(labels.removeFromLeft(labels.getWidth() / 2));
-            sl->panLabel.setBounds(labels);
-        }
+        auto r = getLocalBounds();
+        title.setBounds(r.removeFromTop(20));
+        auto row = r.removeFromTop(28);
+        prev.setBounds(row.removeFromLeft(24));
+        next.setBounds(row.removeFromRight(24));
+        files.setBounds(row.reduced(4, 0));
+        r.removeFromTop(10);
+        auto knobs = r.removeFromTop(108);
+        level.setBounds(knobs.removeFromLeft(knobs.getWidth() / 2).reduced(6, 0));
+        pan.setBounds(knobs.reduced(6, 0));
+        r.removeFromTop(8);
+        active.setBounds(r.removeFromTop(24).withSizeKeepingCentre(90, 24));
     }
 
 private:
-    struct Slot
-    {
-        juce::Label title, levelLabel, panLabel;
-        juce::ToggleButton power;
-        juce::TextButton file;
-        std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> on;
-        std::unique_ptr<Knob> level, pan;
-        juce::Rectangle<int> card;
-    };
+    static constexpr int browseId = 1000, emptyId = 1001;
 
-    void choose(int s)
+    void step(int d)
     {
-        chooser = std::make_unique<juce::FileChooser>("Impulse response", p.getIrFile(s).existsAsFile() ? p.getIrFile(s) : p.getLibraryDir(),
-                                                      "*.wav;*.aif;*.aiff;*.flac");
-        chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-                             [this, s](const juce::FileChooser& fc)
-                             {
-                                 if (fc.getResult().existsAsFile())
-                                     p.setIrFile(s, fc.getResult()), refresh();
-                             });
+        if (list.isEmpty())
+            return;
+        const int idx = list.indexOf(p.getIrFile(slot));
+        p.setIrFile(slot, list[(idx < 0 ? 0 : idx + d + list.size()) % list.size()]);
+        refresh();
+    }
+
+    void picked()
+    {
+        const int id = files.getSelectedId();
+        if (id == emptyId)
+            p.setIrFile(slot, {}), refresh();
+        else if (id == browseId)
+        {
+            chooser = std::make_unique<juce::FileChooser>("Impulse response", p.getIrFile(slot).existsAsFile() ? p.getIrFile(slot) : p.getLibraryDir(),
+                                                          "*.wav;*.aif;*.aiff;*.flac");
+            chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                                 [this](const juce::FileChooser& fc)
+                                 {
+                                     if (fc.getResult().existsAsFile())
+                                         p.setIrFile(slot, fc.getResult());
+                                     refresh();
+                                 });
+        }
+        else if (id > 0 && id <= list.size())
+            p.setIrFile(slot, list[id - 1]);
     }
 
     MJRAmpProcessor& p;
-    juce::OwnedArray<Slot> slots;
+    int slot;
+    juce::String id;
+    juce::Label title;
+    juce::TextButton prev, next;
+    juce::ComboBox files;
+    LabeledKnob level, pan;
+    juce::ToggleButton active;
+    juce::AudioProcessorValueTreeState::ButtonAttachment activeAtt;
+    juce::Array<juce::File> list;
     std::unique_ptr<juce::FileChooser> chooser;
 };
 
@@ -450,86 +592,90 @@ private:
 class Editor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
+    static constexpr int baseW = 1280, baseH = 900; // laid out at this size, scaled to the window
+
     Editor(MJRAmpProcessor& proc)
-        : AudioProcessorEditor(proc), p(proc), amp(proc), cab(proc), tuner(proc), input(proc.params, "input", false), output(proc.params, "output", false)
+        : AudioProcessorEditor(proc), p(proc), rig(proc), tuner(proc), input(proc.params, "input", "INPUT"),
+          output(proc.params, "output", "OUTPUT")
     {
         setLookAndFeel(&look);
         juce::LookAndFeel::setDefaultLookAndFeel(&look); // popups and choosers
+        addAndMakeVisible(content);
 
         title.setText("MJR AMP", juce::dontSendNotification);
-        title.setFont(juce::FontOptions(20.0f, juce::Font::bold));
+        title.setFont(juce::FontOptions(14.0f, juce::Font::bold));
         title.setColour(juce::Label::textColourId, col::accent);
 
-        for (auto& ch : channels())
+        // Captures sorted by channel, then gain level, grouped under headings.
+        const juce::StringArray levels { "Clean", "Edge", "Crunch", "Dimed", "Drive", "Lead" };
+        for (int i = 0; i < (int)p.captures.size(); ++i)
+            order.push_back(i);
+        std::stable_sort(order.begin(), order.end(), [&](int a, int b)
         {
-            auto* b = channelButtons.add(new juce::TextButton(ch));
-            b->setClickingTogglesState(false);
-            b->setTooltip(ch == "I" ? "Channel I" : "Channels I + II jumpered");
-            b->onClick = [this, ch] { select(ch, current().level, current().voicing, current().pedal); };
-            addAndMakeVisible(b);
+            const auto &x = p.captures[(size_t)a], &y = p.captures[(size_t)b];
+            if (x.channel != y.channel)
+                return x.channel == "I";
+            return levels.indexOf(x.level) < levels.indexOf(y.level);
+        });
+        juce::String group;
+        for (int i : order)
+        {
+            const auto& c = p.captures[(size_t)i];
+            const auto g = channelName(c) + "  -  " + c.level;
+            if (g != group)
+                capture.addSectionHeading(group = g);
+            capture.addItem(fullName(c), i + 1);
         }
-        level.onChange = [this] { if (!updating) select(current().channel, level.getText(), current().voicing, current().pedal); };
-        voicing.onChange = [this]
-        {
-            if (updating)
-                return;
-            auto parts = juce::StringArray::fromTokens(voicing.getText(), " ", "");
-            select(current().channel, current().level, parts[0], parts[1]);
-        };
-        level.setTooltip("Gain level of the capture");
-        voicing.setTooltip("EQ voicing of the capture (and pedal, if any)");
+        capture.onChange = [this] { if (capture.getSelectedId() > 0) selectCapture(capture.getSelectedId() - 1); };
+        capture.setTooltip("Amp capture: channel, gain level and voicing");
+        prevCapture.setButtonText("<");
+        nextCapture.setButtonText(">");
+        prevCapture.onClick = [this] { stepCapture(-1); };
+        nextCapture.onClick = [this] { stepCapture(1); };
 
-        library.setButtonText("Library...");
-        library.setTooltip("Folder with the .nam captures and IRs");
-        library.onClick = [this] { chooseLibrary(); };
+        for (auto* l : { &captureLabel, &captured })
+        {
+            l->setJustificationType(juce::Justification::centred);
+            l->setColour(juce::Label::textColourId, col::dim);
+        }
+        captureLabel.setText("CAPTURE", juce::dontSendNotification);
+        captureLabel.setFont(juce::FontOptions(12.0f, juce::Font::bold));
+        captureLabel.setColour(juce::Label::textColourId, col::text);
+
         resetKnobs.setButtonText("Reset knobs");
-        resetKnobs.setTooltip("Set the knobs back to the capture's recorded settings");
+        resetKnobs.setTooltip("Set the amp knobs back to the capture's recorded settings");
         resetKnobs.onClick = [this] { p.resetKnobsToCapture(); };
 
-        tunerButton.setButtonText("TUNER");
         tunerButton.setClickingTogglesState(true);
         tunerButton.setTooltip("Tuner (mutes the output)");
-        tunerButton.onClick = [this] { showView(); };
-        metroButton.setButtonText("METRO");
+        tunerButton.onClick = [this] { tuner.setVisible(tunerButton.getToggleState()); };
         metroButton.setTooltip("Metronome");
         metroButton.onClick = [this]
         {
-            juce::CallOutBox::launchAsynchronously(std::make_unique<MetroPanel>(p), getLocalArea(&metroButton, metroButton.getLocalBounds()), this);
+            juce::CallOutBox::launchAsynchronously(std::make_unique<MetroPanel>(p), content.getLocalArea(&metroButton, metroButton.getLocalBounds()), &content);
         };
+        libraryButton.setTooltip("Folder with the .nam captures and IRs");
+        libraryButton.onClick = [this] { chooseLibrary(); };
 
-        for (auto* t : { &ampTab, &cabTab })
-        {
-            t->setClickingTogglesState(true);
-            t->setRadioGroupId(1);
-            t->onClick = [this] { showView(); };
-            addAndMakeVisible(t);
-        }
-        ampTab.setButtonText("AMP");
-        cabTab.setButtonText("CAB");
-        ampTab.setToggleState(true, juce::dontSendNotification);
+        for (int s = 0; s < MJRAmpProcessor::numIrSlots; ++s)
+            irs.add(new IrBlock(p, s));
 
-        for (auto* l : { &inLabel, &outLabel })
-        {
-            l->setColour(juce::Label::textColourId, col::dim);
-            l->setJustificationType(juce::Justification::centred);
-            addAndMakeVisible(l);
-        }
-        inLabel.setText("IN", juce::dontSendNotification);
-        outLabel.setText("OUT", juce::dontSendNotification);
-
-        for (juce::Component* c : { (juce::Component*)&title, (juce::Component*)&level, (juce::Component*)&voicing,
-                                    (juce::Component*)&library, (juce::Component*)&resetKnobs, (juce::Component*)&input,
-                                    (juce::Component*)&output, (juce::Component*)&inMeter, (juce::Component*)&outMeter,
-                                    (juce::Component*)&amp, (juce::Component*)&cab, (juce::Component*)&tuner,
-                                    (juce::Component*)&tunerButton, (juce::Component*)&metroButton })
-            addAndMakeVisible(c);
-        showView();
+        for (juce::Component* c : { (juce::Component*)&title, (juce::Component*)&input, (juce::Component*)&output, (juce::Component*)&inMeter,
+                                    (juce::Component*)&outMeter, (juce::Component*)&tunerButton, (juce::Component*)&metroButton,
+                                    (juce::Component*)&libraryButton, (juce::Component*)&prevCapture, (juce::Component*)&capture,
+                                    (juce::Component*)&nextCapture, (juce::Component*)&captureLabel, (juce::Component*)&captured,
+                                    (juce::Component*)&resetKnobs, (juce::Component*)&rig })
+            content.addAndMakeVisible(c);
+        for (auto* b : irs)
+            content.addAndMakeVisible(b);
+        content.addChildComponent(tuner);
+        layout();
         refreshCapture();
 
         setResizable(true, true);
-        setResizeLimits(800, 480, 1800, 1080);
-        getConstrainer()->setFixedAspectRatio(1200.0 / 700.0);
-        setSize(1200, 700);
+        setResizeLimits(baseW * 6 / 10, baseH * 6 / 10, baseW * 3 / 2, baseH * 3 / 2);
+        getConstrainer()->setFixedAspectRatio((double)baseW / baseH);
+        setSize(baseW * 9 / 10, baseH * 9 / 10);
         startTimerHz(30);
     }
 
@@ -540,124 +686,78 @@ public:
         setLookAndFeel(nullptr);
     }
 
-    void paint(juce::Graphics& g) override
-    {
-        g.fillAll(col::bg);
-        g.setColour(col::bar);
-        g.fillRect(getLocalBounds().removeFromTop(topH));
-        g.fillRect(getLocalBounds().removeFromBottom(navH));
-        g.setColour(col::line);
-        g.drawHorizontalLine(topH, 0, (float)getWidth());
-        g.drawHorizontalLine(getHeight() - navH, 0, (float)getWidth());
-
-        const bool lit = p.params.getRawParameterValue("metroOn")->load() > 0.5f && juce::Time::getMillisecondCounter() - beatLit < 110;
-        g.setColour(lit ? (downbeat ? col::accent : col::text) : col::line);
-        g.fillEllipse(beatLight.toFloat());
-    }
+    void paint(juce::Graphics& g) override { g.fillAll(col::bg); }
 
     void resized() override
     {
-        auto r = getLocalBounds();
-        auto top = r.removeFromTop(topH).reduced(14, 10);
-        title.setBounds(top.removeFromLeft(110));
-        for (auto* b : channelButtons)
-            b->setBounds(top.removeFromLeft(44)), top.removeFromLeft(4);
-        top.removeFromLeft(8);
-        level.setBounds(top.removeFromLeft(120));
-        top.removeFromLeft(8);
-        voicing.setBounds(top.removeFromLeft(130));
-        top.removeFromLeft(8);
-        resetKnobs.setBounds(top.removeFromLeft(100));
-
-        outMeter.setBounds(top.removeFromRight(8));
-        top.removeFromRight(4);
-        output.setBounds(top.removeFromRight(top.getHeight()));
-        outLabel.setBounds(top.removeFromRight(34));
-        top.removeFromRight(10);
-        inMeter.setBounds(top.removeFromRight(8));
-        top.removeFromRight(4);
-        input.setBounds(top.removeFromRight(top.getHeight()));
-        inLabel.setBounds(top.removeFromRight(28));
-        top.removeFromRight(14);
-        library.setBounds(top.removeFromRight(90));
-        top.removeFromRight(14);
-        beatLight = top.removeFromRight(10).withSizeKeepingCentre(10, 10);
-        top.removeFromRight(6);
-        metroButton.setBounds(top.removeFromRight(72));
-        top.removeFromRight(6);
-        tunerButton.setBounds(top.removeFromRight(72));
-
-        auto nav = r.removeFromBottom(navH).withSizeKeepingCentre(260, navH - 14);
-        ampTab.setBounds(nav.removeFromLeft(126));
-        cabTab.setBounds(nav.removeFromRight(126));
-        amp.setBounds(r);
-        cab.setBounds(r);
-        tuner.setBounds(r);
+        content.setBounds(0, 0, baseW, baseH);
+        content.setTransform(juce::AffineTransform::scale((float)getWidth() / baseW));
     }
 
 private:
-    static constexpr int topH = 56, navH = 50;
-
-    juce::StringArray channels() const
+    void layout()
     {
-        juce::StringArray s;
-        for (auto& c : p.captures)
-            s.addIfNotAlreadyThere(c.channel);
-        return s;
+        title.setBounds(20, 8, 120, 20);
+        tunerButton.setBounds(535, 8, 70, 58);
+        metroButton.setBounds(605, 8, 70, 58);
+        libraryButton.setBounds(675, 8, 70, 58);
+
+        inMeter.setBounds(34, 60, 6, 140);
+        input.setBounds(60, 56, 130, 150);
+        output.setBounds(baseW - 190, 56, 130, 150);
+        outMeter.setBounds(baseW - 40, 60, 6, 140);
+
+        prevCapture.setBounds(400, 88, 32, 34);
+        capture.setBounds(438, 88, 404, 34);
+        nextCapture.setBounds(848, 88, 32, 34);
+        captureLabel.setBounds(438, 126, 404, 18);
+        captured.setBounds(380, 146, 520, 18);
+        resetKnobs.setBounds(585, 170, 110, 26);
+
+        for (int s = 0; s < irs.size(); ++s)
+            irs[s]->setBounds(s < 2 ? 30 : baseW - 230, 250 + (s % 2) * 300, 200, 230);
+
+        rig.setBounds(240, 236, 800, baseH - 236);
+        tuner.setBounds(rig.getBounds());
+    }
+
+    static juce::String channelName(const Capture& c) { return c.channel == "I" ? "Channel I" : "Channels I + II"; }
+    static juce::String fullName(const Capture& c)
+    {
+        return (c.channel == "I" ? "I" : "I+II") + juce::String("   ") + c.level + "   " + c.voicing + (c.pedal.isEmpty() ? "" : "   + " + c.pedal);
     }
     int captureIndex() const { return ((juce::AudioParameterChoice*)p.params.getParameter("capture"))->getIndex(); }
-    const Capture& current() const { return p.captures[(size_t)captureIndex()]; }
 
-    // Closest existing capture to the request: same channel, then level, then voicing.
-    void select(const juce::String& ch, const juce::String& lv, const juce::String& vo, const juce::String& pe)
+    void selectCapture(int idx)
     {
-        int best = -1, bestScore = -1;
-        for (int i = 0; i < (int)p.captures.size(); ++i)
-        {
-            const auto& c = p.captures[(size_t)i];
-            const int score = (c.channel == ch) * 8 + (c.level == lv) * 4 + (c.voicing == vo) * 2 + (c.pedal == pe);
-            if (score > bestScore)
-                best = i, bestScore = score;
-        }
         auto* prm = p.params.getParameter("capture");
         prm->beginChangeGesture();
-        prm->setValueNotifyingHost(prm->convertTo0to1((float)best));
+        prm->setValueNotifyingHost(prm->convertTo0to1((float)idx));
         prm->endChangeGesture();
+    }
+
+    void stepCapture(int d)
+    {
+        const auto it = std::find(order.begin(), order.end(), captureIndex());
+        const int pos = (int)(it - order.begin());
+        selectCapture(order[(size_t)((pos + d + (int)order.size()) % (int)order.size())]);
     }
 
     void refreshCapture()
     {
-        const juce::ScopedValueSetter<bool> guard(updating, true);
-        const auto& c = current();
-        for (auto* b : channelButtons)
-            b->setToggleState(b->getButtonText() == c.channel, juce::dontSendNotification);
-
-        level.clear(juce::dontSendNotification);
-        voicing.clear(juce::dontSendNotification);
-        juce::StringArray levels, voicings;
-        for (auto& x : p.captures)
-            if (x.channel == c.channel)
-            {
-                levels.addIfNotAlreadyThere(x.level);
-                if (x.level == c.level)
-                    voicings.add(x.pedal.isEmpty() ? x.voicing : x.voicing + " " + x.pedal);
-            }
-        level.addItemList(levels, 1);
-        voicing.addItemList(voicings, 1);
-        level.setText(c.level, juce::dontSendNotification);
-        voicing.setText(c.pedal.isEmpty() ? c.voicing : c.voicing + " " + c.pedal, juce::dontSendNotification);
-
+        const auto& c = p.captures[(size_t)captureIndex()];
+        capture.setSelectedId(captureIndex() + 1, juce::dontSendNotification);
         juce::String info;
         if (c.hasKnobs)
         {
-            const char* k[] = { "P", "B", "M", "T", "VI", "VII" };
+            const char* k[] = { "Presence", "Bass", "Middle", "Treble", "Vol I", "Vol II" };
             for (int i = 0; i < 6; ++i)
-                info << k[i] << juce::String(c.knobs[(size_t)i], 1).trimCharactersAtEnd("0").trimCharactersAtEnd(".") << "  ";
-            info = "Captured at  " + info.trim();
+                info << k[i] << " " << juce::String(c.knobs[(size_t)i], 1).trimCharactersAtEnd("0").trimCharactersAtEnd(".") << "    ";
+            info = "Captured at:  " + info.trim();
         }
         else
-            info = "Capture settings unknown: knobs are relative to where they were when it was loaded";
-        amp.captured.setText(info, juce::dontSendNotification);
+            info = "Captured settings unknown: knobs act relative to where they were";
+        captured.setText(info, juce::dontSendNotification);
         resetKnobs.setEnabled(c.hasKnobs);
         shownCapture = captureIndex();
     }
@@ -669,24 +769,21 @@ private:
                              [this](const juce::FileChooser& fc)
                              {
                                  if (fc.getResult().isDirectory())
-                                     p.setLibraryDir(fc.getResult()), cab.refresh();
+                                 {
+                                     p.setLibraryDir(fc.getResult());
+                                     for (auto* b : irs)
+                                         b->refresh();
+                                 }
                              });
-    }
-
-    void showView()
-    {
-        const bool tuning = tunerButton.getToggleState();
-        amp.setVisible(!tuning && ampTab.getToggleState());
-        cab.setVisible(!tuning && cabTab.getToggleState());
-        tuner.setVisible(tuning);
     }
 
     void timerCallback() override
     {
         if (captureIndex() != shownCapture)
             refreshCapture();
-        const bool missing = !p.getLibraryDir().getChildFile(current().file).existsAsFile();
-        amp.missing.setText(missing ? "Capture not found: choose the library folder (Library...)" : "", juce::dontSendNotification);
+        const bool missing = !p.getLibraryDir().getChildFile(p.captures[(size_t)captureIndex()].file).existsAsFile();
+        rig.missing.setText("Capture not found.\nChoose the library folder (LIBRARY).", juce::dontSendNotification);
+        rig.missing.setVisible(missing);
 
         auto update = [](Meter& m, std::atomic<float>& peak)
         {
@@ -701,29 +798,31 @@ private:
         {
             shownBeat = beat;
             beatLit = juce::Time::getMillisecondCounter();
-            downbeat = p.beatInBar.load() == 0;
+            metroButton.downbeat = p.beatInBar.load() == 0;
         }
-        repaint(beatLight);
+        const bool lit = p.params.getRawParameterValue("metroOn")->load() > 0.5f && juce::Time::getMillisecondCounter() - beatLit < 110;
+        if (lit != metroButton.lit)
+            metroButton.lit = lit, metroButton.repaint();
     }
 
     MJRAmpProcessor& p;
     Look look;
     juce::TooltipWindow tooltips { this, 600 };
-    juce::Label title, inLabel, outLabel;
-    juce::OwnedArray<juce::TextButton> channelButtons;
-    juce::ComboBox level, voicing;
-    juce::TextButton library, resetKnobs, ampTab, cabTab, tunerButton, metroButton;
-    AmpView amp;
-    CabView cab;
+    juce::Component content;
+    juce::Label title, captureLabel, captured;
+    std::vector<int> order;
+    juce::ComboBox capture;
+    juce::TextButton prevCapture, nextCapture, resetKnobs;
+    IconButton tunerButton { "TUNER", IconButton::tuner }, metroButton { "METRO", IconButton::metronome },
+        libraryButton { "LIBRARY", IconButton::folder };
+    Rig rig;
     TunerView tuner;
-    Knob input, output;
+    juce::OwnedArray<IrBlock> irs;
+    LabeledKnob input, output;
     Meter inMeter, outMeter;
     std::unique_ptr<juce::FileChooser> chooser;
     int shownCapture = -1, shownBeat = 0;
     juce::uint32 beatLit = 0;
-    bool downbeat = false;
-    juce::Rectangle<int> beatLight;
-    bool updating = false;
 };
 } // namespace
 
