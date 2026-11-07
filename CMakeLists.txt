@@ -29,14 +29,22 @@ juce_add_plugin(MJRAmp
     NEEDS_MIDI_INPUT FALSE
     COPY_PLUGIN_AFTER_BUILD FALSE)
 
-juce_add_binary_data(MJRData SOURCES data/captures.json)
+# The amp photo is not ours to publish: used only if present locally, otherwise a drawn panel.
+set(MJR_DATA data/captures.json)
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/assets-local/amp.jpg)
+    list(APPEND MJR_DATA assets-local/amp.jpg)
+    set(MJR_HAS_PHOTO 1)
+else()
+    set(MJR_HAS_PHOTO 0)
+endif()
+juce_add_binary_data(MJRData SOURCES ${MJR_DATA})
 set_target_properties(MJRData PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-target_sources(MJRAmp PRIVATE src/Processor.cpp)
+target_sources(MJRAmp PRIVATE src/Processor.cpp src/Editor.cpp)
 
 target_compile_definitions(MJRAmp PUBLIC
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0
-    JUCE_DISPLAY_SPLASH_SCREEN=0)
+    JUCE_DISPLAY_SPLASH_SCREEN=0 MJR_HAS_PHOTO=${MJR_HAS_PHOTO})
 
 target_link_libraries(MJRAmp
     PRIVATE MJRData juce::juce_audio_utils juce::juce_dsp

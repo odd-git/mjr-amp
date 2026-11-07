@@ -129,18 +129,27 @@ void MJRAmpProcessor::loadCapture(int idx, bool resetKnobs)
 {
     const auto& c = captures[(size_t)idx];
     engine.load(libraryDir.getChildFile(c.file));
+    // Captures with known settings: knobs jump there, so the added DSP starts neutral.
+    // Unknown settings: wherever the knobs are now becomes neutral.
+    for (int i = 0; i < 6; ++i)
+        baseline[(size_t)i] = c.hasKnobs ? c.knobs[(size_t)i] : knob[(size_t)i]->load();
+    loadedCapture = idx;
+    if (resetKnobs)
+        resetKnobsToCapture();
+}
+
+void MJRAmpProcessor::resetKnobsToCapture()
+{
+    const auto& c = captures[(size_t)loadedCapture.load()];
+    if (!c.hasKnobs)
+        return;
     for (int i = 0; i < 6; ++i)
     {
-        // Captures with known settings: knobs jump there, so the added DSP starts neutral.
-        // Unknown settings: wherever the knobs are now becomes neutral.
-        baseline[(size_t)i] = c.hasKnobs ? c.knobs[(size_t)i] : knob[(size_t)i]->load();
-        if (resetKnobs && c.hasKnobs)
-        {
-            auto* p = params.getParameter(knobIds[i]);
-            p->setValueNotifyingHost(p->convertTo0to1(c.knobs[(size_t)i]));
-        }
+        auto* p = params.getParameter(knobIds[i]);
+        p->beginChangeGesture();
+        p->setValueNotifyingHost(p->convertTo0to1(c.knobs[(size_t)i]));
+        p->endChangeGesture();
     }
-    loadedCapture = idx;
 }
 
 void MJRAmpProcessor::prepareToPlay(double sr, int maxBlock)
@@ -289,6 +298,6 @@ void MJRAmpProcessor::setStateInformation(const void* data, int size)
     loadCapture(((juce::AudioParameterChoice*)params.getParameter("capture"))->getIndex(), false);
 }
 
-juce::AudioProcessorEditor* MJRAmpProcessor::createEditor() { return new juce::GenericAudioProcessorEditor(*this); }
+juce::AudioProcessorEditor* MJRAmpProcessor::createEditor() { return createMJREditor(*this); }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new MJRAmpProcessor(); }

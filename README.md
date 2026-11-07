@@ -18,6 +18,22 @@ cmake --build build --parallel
 Linux deps (Debian/Ubuntu): `libasound2-dev libjack-jackd2-dev libfreetype-dev libfontconfig1-dev
 libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxext-dev libxcomposite-dev libxi-dev libgl1-mesa-dev`.
 
+## Capture library
+
+Choose the folder with your `.nam` captures and IRs from **Library...**. The captures
+expected and their recorded knob settings are listed in `data/captures.json`: when a
+capture is selected the knobs move to those settings, and turning them away adds gain
+and EQ relative to the capture.
+
+Optional local artwork: put a front-panel photo at `assets-local/amp.jpg` (git-ignored)
+before configuring and it replaces the drawn panel.
+
+## Tests
+
+```sh
+build/mjr-test <library dir> libs/NeuralAmpModelerCore/example_audio/input.wav [snapshot dir]
+```
+
 ## License
 
 AGPL-3.0 (JUCE is used under its AGPLv3 option). NeuralAmpModelerCore is MIT.

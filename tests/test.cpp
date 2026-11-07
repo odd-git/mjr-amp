@@ -154,6 +154,29 @@ int main(int argc, char** argv)
         CHECK(b.getIrFile(2) == a.getIrFile(0), "IR file not restored");
     }
 
+    // 5. Optional: editor snapshots, mjr-test <lib> <DI> <out dir>
+    if (argc > 3)
+    {
+        MJRAmpProcessor p;
+        p.setLibraryDir(lib);
+        p.poll();
+        std::unique_ptr<juce::AudioProcessorEditor> ed(p.createEditor());
+        const auto outDir = cwd.getChildFile(argv[3]);
+        outDir.createDirectory();
+        auto save = [&](const char* name)
+        {
+            juce::FileOutputStream os(outDir.getChildFile(name));
+            os.setPosition(0), os.truncate();
+            juce::PNGImageFormat().writeImageToStream(ed->createComponentSnapshot(ed->getLocalBounds(), true, 1.0f), os);
+        };
+        save("amp.png");
+        for (auto* c : ed->getChildren())
+            if (auto* b = dynamic_cast<juce::TextButton*>(c); b != nullptr && b->getButtonText() == "CAB")
+                b->setToggleState(true, juce::dontSendNotification), b->onClick();
+        save("cab.png");
+        std::cout << "snapshots in " << outDir.getFullPathName() << "\n";
+    }
+
     std::cout << (failures == 0 ? "OK\n" : "FAILED\n");
     return failures == 0 ? 0 : 1;
 }

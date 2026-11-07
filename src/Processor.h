@@ -12,6 +12,9 @@ struct Capture
     juce::String displayName() const { return channel + " " + level + " " + voicing + (pedal.isEmpty() ? "" : " " + pedal); }
 };
 
+class MJRAmpProcessor;
+juce::AudioProcessorEditor* createMJREditor(MJRAmpProcessor&);
+
 class MJRAmpProcessor : public juce::AudioProcessor, private juce::Timer
 {
 public:
@@ -48,6 +51,7 @@ public:
     void setIrFile(int slot, const juce::File&);
     juce::File getIrFile(int slot) const { return irFiles[(size_t)slot]; }
     void poll(); // applies capture changes; called by the timer
+    void resetKnobsToCapture(); // knobs back to the active capture's recorded settings
     bool isIdle() const { return engine.isIdle(); }
 
     std::vector<Capture> captures; // before params: the parameter layout is built from it
