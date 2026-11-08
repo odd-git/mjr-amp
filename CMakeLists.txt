@@ -48,7 +48,7 @@ foreach(fx Dynamics3 Density3 TapeDelay2 PearEQ StereoChorus Galactic3 Doublelay
     set(fx_sources libs/airwindows/${fx}/${fx}.cpp libs/airwindows/${fx}/${fx}Proc.cpp)
     target_sources(MJRAmp PRIVATE ${fx_sources})
     set_source_files_properties(${fx_sources} PROPERTIES
-        COMPILE_DEFINITIONS createEffectInstance=mjr_create_${fx}
+        COMPILE_DEFINITIONS "createEffectInstance=mjr_create_${fx};_USE_MATH_DEFINES"
         COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>")
 endforeach()
 target_include_directories(MJRAmp SYSTEM PRIVATE libs/airwindows)

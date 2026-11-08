@@ -763,10 +763,44 @@ static juce::StringArray usableDevices(juce::AudioIODeviceType& t, bool input)
     return out;
 }
 
+// Under JACK the buffer belongs to the server. On PipeWire it can be forced graph-wide (like a DAW does);
+// JUCE's JACK device only reads the size when it opens, so reopen it once the new quantum is live.
+static bool pipeWireBuffer(juce::AudioDeviceManager& dm)
+{
+   #if JUCE_LINUX
+    return dm.getCurrentAudioDeviceType() == "JACK";
+   #else
+    juce::ignoreUnused(dm);
+    return false;
+   #endif
+}
+static void forcePipeWireQuantum(int samples) // 0 hands the choice back to PipeWire
+{
+    juce::ChildProcess pw;
+    if (pw.start(juce::StringArray { "pw-metadata", "-n", "settings", "0", "clock.force-quantum", juce::String(samples) }))
+        pw.waitForProcessToFinish(2000);
+}
+static void setBufferSize(juce::StandalonePluginHolder& holder, int samples)
+{
+    auto& dm = holder.deviceManager;
+    if (pipeWireBuffer(dm))
+    {
+        forcePipeWireQuantum(samples);
+        if (holder.settings != nullptr)
+            holder.settings->setValue("pipewireQuantum", samples);
+        juce::Timer::callAfterDelay(300, [&dm] { dm.closeAudioDevice(), dm.restartLastAudioDevice(); });
+        return;
+    }
+    auto s = dm.getAudioDeviceSetup();
+    s.bufferSize = samples;
+    dm.setAudioDeviceSetup(s, true);
+}
+
 // On PipeWire/JACK systems JACK is the right backend (ALSA hw devices fight PipeWire for the card),
 // so switch to it and drop the ALSA list altogether.
-static void preferJack(juce::AudioDeviceManager& dm)
+static void preferJack(juce::StandalonePluginHolder& holder)
 {
+    auto& dm = holder.deviceManager;
    #if JUCE_LINUX
     juce::AudioIODeviceType *jack = nullptr, *alsa = nullptr;
     for (auto* t : dm.getAvailableDeviceTypes())
@@ -783,8 +817,10 @@ static void preferJack(juce::AudioDeviceManager& dm)
         dm.setCurrentAudioDeviceType("JACK", true);
     if (dm.getCurrentAudioDevice() != nullptr)
         dm.removeAudioDeviceType(alsa);
+    if (const int q = holder.settings != nullptr ? holder.settings->getIntValue("pipewireQuantum") : 0; q > 0 && pipeWireBuffer(dm))
+        setBufferSize(holder, q);
    #else
-    juce::ignoreUnused(dm);
+    juce::ignoreUnused(holder);
    #endif
 }
 
@@ -811,26 +847,40 @@ public:
         };
         fill(in, true, setup.inputDeviceName);
         fill(out, false, setup.outputDeviceName);
+        if (auto* dev = dm.getCurrentAudioDevice())
+        {
+            const auto sizes = pipeWireBuffer(dm) ? juce::Array<int> { 32, 64, 128, 256, 512, 1024 } : dev->getAvailableBufferSizes();
+            for (int n : sizes)
+                buffer.addItem(juce::String(n) + " samples (" + juce::String(1000.0 * n / dev->getCurrentSampleRate(), 1) + " ms)", n);
+            buffer.setSelectedId(dev->getCurrentBufferSizeSamples(), juce::dontSendNotification);
+        }
+        buffer.onChange = [this]
+        {
+            setBufferSize(holder, buffer.getSelectedId());
+            status.setText("Buffer " + juce::String(buffer.getSelectedId()), juce::dontSendNotification);
+        };
+        bufLabel.setText("Buffer", juce::dontSendNotification);
         inLabel.setText(separate ? "Guitar input" : "Interface", juce::dontSendNotification);
         outLabel.setText("Output", juce::dontSendNotification);
-        for (auto* l : { &inLabel, &outLabel, &status })
+        for (auto* l : { &inLabel, &outLabel, &bufLabel, &status })
             l->setColour(juce::Label::textColourId, col::dim);
         advanced.setButtonText("Advanced...");
         advanced.onClick = [this] { holder.showAudioSettingsDialog(); };
-        for (juce::Component* c : { (juce::Component*)&inLabel, (juce::Component*)&in, (juce::Component*)&advanced, (juce::Component*)&status })
+        for (juce::Component* c : { (juce::Component*)&inLabel, (juce::Component*)&in, (juce::Component*)&bufLabel, (juce::Component*)&buffer,
+                                    (juce::Component*)&advanced, (juce::Component*)&status })
             addAndMakeVisible(c);
         if (separate)
         {
             addAndMakeVisible(outLabel);
             addAndMakeVisible(out);
         }
-        setSize(380, separate ? 150 : 115);
+        setSize(380, separate ? 186 : 150);
     }
 
     void resized() override
     {
         auto r = getLocalBounds().reduced(12);
-        for (auto [label, box] : { std::pair { &inLabel, &in }, std::pair { &outLabel, &out } })
+        for (auto [label, box] : { std::pair { &inLabel, &in }, std::pair { &outLabel, &out }, std::pair { &bufLabel, &buffer } })
         {
             if (!box->isVisible())
                 continue;
@@ -858,8 +908,8 @@ private:
 
     juce::StandalonePluginHolder& holder;
     bool separate = true;
-    juce::ComboBox in, out;
-    juce::Label inLabel, outLabel, status;
+    juce::ComboBox in, out, buffer;
+    juce::Label inLabel, outLabel, bufLabel, status;
     juce::TextButton advanced;
 };
 
@@ -935,7 +985,7 @@ public:
         {
             holder->getMuteInputValue().setValue(false);
             audioButton.setTooltip("Audio interface, inputs and outputs");
-            preferJack(holder->deviceManager);
+            preferJack(*holder);
             audioButton.onClick = [this, holder]
             {
                 juce::CallOutBox::launchAsynchronously(std::make_unique<AudioPanel>(*holder), content.getLocalArea(&audioButton, audioButton.getLocalBounds()),
@@ -983,6 +1033,8 @@ public:
     ~Editor() override
     {
         p.tunerActive = false; // never leave the plugin muted when the window closes
+        if (auto* holder = juce::StandalonePluginHolder::getInstance(); holder != nullptr && pipeWireBuffer(holder->deviceManager))
+            forcePipeWireQuantum(0); // give the other apps their buffer back
         juce::LookAndFeel::setDefaultLookAndFeel(nullptr);
         setLookAndFeel(nullptr);
     }
