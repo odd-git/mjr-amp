@@ -736,6 +736,117 @@ private:
     std::vector<double> taps;
 };
 
+// Device names worth showing: drops MIDI bridges and ALSA's per-speaker-layout/HDMI/S/PDIF PCMs.
+static juce::StringArray usableDevices(juce::AudioIODeviceType& t, bool input)
+{
+    juce::StringArray out;
+    for (auto& n : t.getDeviceNames(input))
+    {
+        const auto l = n.toLowerCase();
+        if (!(l.contains("midi") || l.contains("surround") || l.contains("hdmi") || l.contains("iec958") || l.contains("direct sample mixing")))
+            out.add(n);
+    }
+    return out;
+}
+
+// On PipeWire/JACK systems JACK is the right backend (ALSA hw devices fight PipeWire for the card),
+// so switch to it and drop the ALSA list altogether.
+static void preferJack(juce::AudioDeviceManager& dm)
+{
+   #if JUCE_LINUX
+    juce::AudioIODeviceType *jack = nullptr, *alsa = nullptr;
+    for (auto* t : dm.getAvailableDeviceTypes())
+    {
+        if (t->getTypeName() == "JACK") jack = t;
+        if (t->getTypeName() == "ALSA") alsa = t;
+    }
+    if (jack == nullptr || alsa == nullptr)
+        return;
+    jack->scanForDevices();
+    if (usableDevices(*jack, false).isEmpty())
+        return;
+    if (dm.getCurrentAudioDeviceType() != "JACK")
+        dm.setCurrentAudioDeviceType("JACK", true);
+    if (dm.getCurrentAudioDevice() != nullptr)
+        dm.removeAudioDeviceType(alsa);
+   #else
+    juce::ignoreUnused(dm);
+   #endif
+}
+
+// Two plain choices (where the guitar comes in, where the sound goes out); the full JUCE page stays behind "Advanced".
+class AudioPanel : public juce::Component
+{
+public:
+    AudioPanel(juce::StandalonePluginHolder& h) : holder(h)
+    {
+        auto& dm = holder.deviceManager;
+        const auto setup = dm.getAudioDeviceSetup();
+        auto* type = dm.getCurrentDeviceTypeObject();
+        separate = type == nullptr || type->hasSeparateInputsAndOutputs();
+        auto fill = [&](juce::ComboBox& box, bool input, const juce::String& current)
+        {
+            auto names = type != nullptr ? usableDevices(*type, input) : juce::StringArray();
+            if (current.isNotEmpty())
+                names.addIfNotAlreadyThere(current);
+            box.addItemList(names, 1);
+            box.setText(current, juce::dontSendNotification);
+            box.onChange = [this] { apply(); };
+        };
+        fill(in, true, setup.inputDeviceName);
+        fill(out, false, setup.outputDeviceName);
+        inLabel.setText(separate ? "Guitar input" : "Interface", juce::dontSendNotification);
+        outLabel.setText("Output", juce::dontSendNotification);
+        for (auto* l : { &inLabel, &outLabel, &status })
+            l->setColour(juce::Label::textColourId, col::dim);
+        advanced.setButtonText("Advanced...");
+        advanced.onClick = [this] { holder.showAudioSettingsDialog(); };
+        for (juce::Component* c : { (juce::Component*)&inLabel, (juce::Component*)&in, (juce::Component*)&advanced, (juce::Component*)&status })
+            addAndMakeVisible(c);
+        if (separate)
+        {
+            addAndMakeVisible(outLabel);
+            addAndMakeVisible(out);
+        }
+        setSize(380, separate ? 150 : 115);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced(12);
+        for (auto [label, box] : { std::pair { &inLabel, &in }, std::pair { &outLabel, &out } })
+        {
+            if (!box->isVisible())
+                continue;
+            auto row = r.removeFromTop(28);
+            label->setBounds(row.removeFromLeft(100));
+            box->setBounds(row);
+            r.removeFromTop(8);
+        }
+        auto row = r.removeFromBottom(28);
+        advanced.setBounds(row.removeFromRight(110));
+        status.setBounds(row);
+    }
+
+private:
+    void apply()
+    {
+        auto& dm = holder.deviceManager;
+        auto s = dm.getAudioDeviceSetup();
+        s.inputDeviceName = in.getText();
+        s.outputDeviceName = separate ? out.getText() : in.getText();
+        s.useDefaultInputChannels = s.useDefaultOutputChannels = true;
+        const auto err = dm.setAudioDeviceSetup(s, true);
+        status.setText(err.isEmpty() ? "OK" : err, juce::dontSendNotification);
+    }
+
+    juce::StandalonePluginHolder& holder;
+    bool separate = true;
+    juce::ComboBox in, out;
+    juce::Label inLabel, outLabel, status;
+    juce::TextButton advanced;
+};
+
 class Editor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
@@ -808,7 +919,12 @@ public:
         {
             holder->getMuteInputValue().setValue(false);
             audioButton.setTooltip("Audio interface, inputs and outputs");
-            audioButton.onClick = [holder] { holder->showAudioSettingsDialog(); };
+            preferJack(holder->deviceManager);
+            audioButton.onClick = [this, holder]
+            {
+                juce::CallOutBox::launchAsynchronously(std::make_unique<AudioPanel>(*holder), content.getLocalArea(&audioButton, audioButton.getLocalBounds()),
+                                                       &content);
+            };
             content.addAndMakeVisible(audioButton);
         }
         libraryButton.onClick = [this] { chooseLibrary(); };
