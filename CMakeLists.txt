@@ -44,7 +44,7 @@ target_sources(MJRAmp PRIVATE src/Processor.cpp src/Editor.cpp)
 
 # Airwindows effects (MIT): the LinuxVST sources compile unchanged against libs/airwindows/audioeffectx.h.
 # Every plugin defines createEffectInstance(); rename it per plugin so they can live in one binary.
-foreach(fx Dynamics3 Density3 TapeDelay2 PearEQ StereoChorus Galactic3 Doublelay)
+foreach(fx Dynamics3 TapeDelay2 PearEQ StereoChorus Galactic3 Doublelay)
     set(fx_sources libs/airwindows/${fx}/${fx}.cpp libs/airwindows/${fx}/${fx}Proc.cpp)
     target_sources(MJRAmp PRIVATE ${fx_sources})
     set_source_files_properties(${fx_sources} PROPERTIES

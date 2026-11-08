@@ -273,6 +273,20 @@ int main(int argc, char** argv)
             run(p, b, block);
             return b;
         };
+        {
+            NamPedal ts; // nearest-capture choice from the knobs
+            if (ts.setFolder(juce::File::getSpecialLocation(juce::File::userMusicDirectory)
+                                 .getChildFile("Music Production/NAM Profile/Pedals/Ibanez TS9 Tube Screamer")) > 0)
+            {
+                ts.update(7, 7, 7);
+                CHECK(ts.currentName().endsWith("Drive 7 Tone 7 Level 7"), "drive 7/7/7 picked " << ts.currentName());
+                ts.update(0.5f, 6, 5);
+                CHECK(ts.currentName().endsWith("Drive 0 Tone 6 Level 6"), "drive 0.5/6/5 picked " << ts.currentName());
+                ts.update(9.5f, 9, 7);
+                CHECK(ts.currentName().endsWith("Drive 10 Tone 9 Level 7"), "drive 9.5/9/7 picked " << ts.currentName());
+                std::cout << "drive pedal: nearest-capture choice ok\n";
+            }
+        }
         const auto off = render(nullptr);
         {
             MJRAmpProcessor p; // amp switched off on the panel: DI straight to the cab, still sound
@@ -309,7 +323,7 @@ int main(int argc, char** argv)
             const float rms = on.getRMSLevel(1, 0, 48000);
             std::cout << "fx " << fx.id << ": max diff " << diff << ", rms " << rms << " (off " << offRms << ")\n";
             CHECK(finite, fx.id << " produced NaN/inf");
-            if (fx.create == nullptr)
+            if (fx.placeholder())
                 CHECK(diff < 1e-6f, fx.id << " placeholder changed the audio");
             else
             {

@@ -8,6 +8,12 @@ juce::File rememberedLibraryFile()
 {
     return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory).getChildFile("MJR Amp/library.txt");
 }
+juce::File rememberedDriveFile()
+{
+    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory).getChildFile("MJR Amp/drive.txt");
+}
+constexpr int driveFx = 2; // fxChain index of the NAM drive pedal
+static_assert(std::string_view(fxChain[driveFx].id) == "drive");
 
 std::vector<Capture> parseCaptures()
 {
@@ -125,7 +131,17 @@ MJRAmpProcessor::MJRAmpProcessor()
     auto remembered = rememberedLibraryFile().loadFileAsString().trim();
     setLibraryDir(remembered.isNotEmpty() ? juce::File(remembered)
                                           : juce::File::getSpecialLocation(juce::File::userMusicDirectory).getChildFile("MJR Amp"));
+    const auto drive = rememberedDriveFile().loadFileAsString().trim();
+    setDriveFolder(drive.isNotEmpty() ? juce::File(drive)
+                                      : juce::File::getSpecialLocation(juce::File::userMusicDirectory)
+                                            .getChildFile("Music Production/NAM Profile/Pedals/Ibanez TS9 Tube Screamer"));
     startTimerHz(20);
+}
+
+void MJRAmpProcessor::setDriveFolder(const juce::File& dir)
+{
+    if (drivePedal.setFolder(dir) > 0)
+        rememberedDriveFile().create(), rememberedDriveFile().replaceWithText(dir.getFullPathName());
 }
 
 MJRAmpProcessor::~MJRAmpProcessor() { stopTimer(); }
@@ -161,6 +177,8 @@ void MJRAmpProcessor::poll()
     if (idx != loadedCapture)
         loadCapture(idx, true);
     engine.collectGarbage();
+    auto k = [this](int i) { return fxKnob[driveFx][(size_t)i]->load() * 10.0f; };
+    drivePedal.update(k(0), k(1), k(2));
 }
 
 void MJRAmpProcessor::loadCapture(int idx, bool resetKnobs)
@@ -194,7 +212,9 @@ void MJRAmpProcessor::prepareToPlay(double sr, int maxBlock)
 {
     sampleRate = sr;
     engine.prepare(sr, maxBlock);
-    setLatencySamples(engine.getLatency());
+    drivePedal.prepare(sr, maxBlock);
+    // ponytail: the drive's resampler latency (host rate != 48k) is reported even when the pedal is off.
+    setLatencySamples(engine.getLatency() + drivePedal.getLatency());
 
     driveGain.reset(sr, 0.02);
     outGain.reset(sr, 0.02);
@@ -364,8 +384,16 @@ void MJRAmpProcessor::runFx(FxStage stage, juce::AudioBuffer<float>& buffer, int
     const int n = buffer.getNumSamples();
     for (size_t i = 0; i < (size_t)numFx; ++i)
     {
+        if (fxChain[i].stage != stage || fxOn[i]->load() < 0.5f)
+            continue;
+        if (i == (size_t)driveFx)
+        {
+            auto k = [&](size_t j) { return fxKnob[i][j]->load() * 10.0f; };
+            drivePedal.process(buffer.getWritePointer(0), n, k(0), k(1), k(2));
+            continue;
+        }
         auto* effect = fx[i].get();
-        if (fxChain[i].stage != stage || effect == nullptr || fxOn[i]->load() < 0.5f)
+        if (effect == nullptr)
             continue; // ponytail: the Octaver has no DSP yet (pitch shifter, e.g. signalsmith-stretch)
         for (int k = 0; k < fxChain[i].numKnobs(); ++k)
             effect->setParameter(k, fxKnob[i][(size_t)k]->load());
@@ -448,6 +476,7 @@ void MJRAmpProcessor::getStateInformation(juce::MemoryBlock& dest)
 {
     auto state = params.copyState();
     state.setProperty("libraryDir", libraryDir.getFullPathName(), nullptr);
+    state.setProperty("driveDir", drivePedal.getFolder().getFullPathName(), nullptr);
     for (int s = 0; s < numIrSlots; ++s)
         state.setProperty("irFile" + juce::String(s + 1), irFiles[(size_t)s].getFullPathName(), nullptr);
     copyXmlToBinary(*state.createXml(), dest);
@@ -465,6 +494,8 @@ void MJRAmpProcessor::setStateInformation(const void* data, int size)
         const auto path = state.getProperty("irFile" + juce::String(s + 1)).toString();
         setIrFile(s, path.isEmpty() ? juce::File() : juce::File(path));
     }
+    if (const auto drive = state.getProperty("driveDir").toString(); drive.isNotEmpty())
+        setDriveFolder(juce::File(drive));
     const auto dir = state.getProperty("libraryDir").toString();
     if (dir.isNotEmpty())
         setLibraryDir(juce::File(dir));

@@ -20,6 +20,7 @@ class NamEngine
 public:
     static constexpr double modelRate = 48000.0; // every capture in the library is 48 kHz
     static constexpr float targetLoudnessDb = -18.0f;
+    bool normaliseLoudness = true; // amps: level every capture to targetLoudnessDb. Set before load().
 
     ~NamEngine()
     {
@@ -50,14 +51,15 @@ public:
     void load(const juce::File& file)
     {
         const int block = maxModelBlock;
-        loader.addJob([this, file, block]
+        const bool normalise = normaliseLoudness;
+        loader.addJob([this, file, block, normalise]
         {
             std::unique_ptr<Model> m;
             try
             {
                 m.reset(new Model { nam::get_dsp(std::filesystem::path(file.getFullPathName().toStdString())), 1.0f });
                 m->dsp->ResetAndPrewarm(modelRate, block);
-                if (m->dsp->HasLoudness())
+                if (normalise && m->dsp->HasLoudness())
                     m->gain = juce::Decibels::decibelsToGain(targetLoudnessDb - (float)m->dsp->GetLoudness());
             }
             catch (const std::exception& e)

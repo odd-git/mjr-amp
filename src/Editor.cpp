@@ -269,15 +269,44 @@ struct ChannelSwitch : juce::ToggleButton
 // Placeholder effect pedal: name, LED, footswitch. Click toggles the module on/off.
 struct Pedal : juce::ToggleButton
 {
-    Pedal(juce::AudioProcessorValueTreeState& params, const FxInfo& fx, juce::Colour c)
-        : juce::ToggleButton(fx.name), colour(c), placeholder(fx.create == nullptr), attachment(params, juce::String(fx.id) + "On", *this)
+    Pedal(MJRAmpProcessor& p, const FxInfo& fx, juce::Colour c)
+        : juce::ToggleButton(fx.name), proc(p), colour(c), placeholder(fx.placeholder()), nam(std::string_view(fx.id) == "drive"),
+          attachment(p.params, juce::String(fx.id) + "On", *this)
     {
+        auto& params = p.params;
         setTooltip(placeholder ? juce::String(fx.name) + " (placeholder: audio passes through)" : juce::String(fx.name));
+        if (nam) // captures folder of the real pedal
+        {
+            folder.setButtonText("...");
+            folder.setTooltip("Folder with the pedal's NAM captures");
+            folder.onClick = [this]
+            {
+                chooser = std::make_unique<juce::FileChooser>("Pedal captures folder", proc.drivePedal.getFolder());
+                chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories, [this](const juce::FileChooser& fc)
+                {
+                    if (fc.getResult() != juce::File())
+                        proc.setDriveFolder(fc.getResult());
+                });
+            };
+            addAndMakeVisible(folder);
+        }
         for (int k = 0; k < fx.numKnobs(); ++k)
-            addAndMakeVisible(knobs.add(new LabeledKnob(params, juce::String(fx.id) + "K" + juce::String(k), fx.knobs[(size_t)k].name)));
+        {
+            auto* knob = knobs.add(new LabeledKnob(params, juce::String(fx.id) + "K" + juce::String(k), fx.knobs[(size_t)k].name));
+            knob->value.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.85f)); // grey vanishes on bright pedals
+            addAndMakeVisible(knob);
+        }
+    }
+    juce::String getTooltip() override
+    {
+        if (!nam)
+            return juce::ToggleButton::getTooltip();
+        const auto shot = proc.drivePedal.currentName();
+        return shot.isEmpty() ? "Drive: no NAM captures found, pick their folder with ..." : "Drive, nearest capture: " + shot;
     }
     void resized() override
     {
+        folder.setBounds(getWidth() - 40, 12, 28, 20);
         auto r = getLocalBounds().reduced(10).withTrimmedTop(80).withTrimmedBottom(96);
         const int cols = knobs.size() > 2 ? 2 : knobs.size(), cw = cols > 0 ? r.getWidth() / cols : 0;
         for (int k = 0; k < knobs.size(); ++k)
@@ -322,8 +351,11 @@ struct Pedal : juce::ToggleButton
         g.setFont(juce::FontOptions(12.0f, juce::Font::bold));
         g.drawText(on ? "ON" : "OFF", r.removeFromBottom(14), juce::Justification::centred);
     }
+    MJRAmpProcessor& proc;
     juce::Colour colour;
-    bool placeholder;
+    bool placeholder, nam;
+    juce::TextButton folder;
+    std::unique_ptr<juce::FileChooser> chooser;
     juce::OwnedArray<LabeledKnob> knobs;
     juce::AudioProcessorValueTreeState::ButtonAttachment attachment;
 };
@@ -332,7 +364,7 @@ struct Pedal : juce::ToggleButton
 class FxPage : public juce::Component
 {
 public:
-    FxPage(juce::AudioProcessorValueTreeState& params, FxStage stage, juce::String from, juce::String to)
+    FxPage(MJRAmpProcessor& p, FxStage stage, juce::String from, juce::String to)
         : source(std::move(from)), destination(std::move(to))
     {
         const juce::Colour palette[] = { juce::Colour(0xff2f5d8c), juce::Colour(0xff6b3fa0), juce::Colour(0xffb5651d), juce::Colour(0xff2e7d6b),
@@ -340,7 +372,7 @@ public:
                                          juce::Colour(0xff9c4a1a), juce::Colour(0xff2a7a8c) };
         for (int i = 0; i < numFx; ++i)
             if (fxChain[i].stage == stage)
-                addAndMakeVisible(*pedals.add(new Pedal(params, fxChain[i], palette[i % 10])));
+                addAndMakeVisible(*pedals.add(new Pedal(p, fxChain[i], palette[i % 10])));
     }
 
     void paint(juce::Graphics& g) override
@@ -1336,8 +1368,8 @@ private:
     juce::TextButton prevCapture, nextCapture, resetKnobs;
     IconButton preNav { "PRE FX", IconButton::pedal }, ampNav { "AMP", IconButton::amp }, eqNav { "EQ", IconButton::eq },
         postNav { "POST FX", IconButton::pedal };
-    FxPage prePage { p.params, FxStage::pre, "INPUT", "AMP" }, eqPage { p.params, FxStage::eq, "AMP", "CAB" },
-        postPage { p.params, FxStage::post, "CAB", "OUTPUT" };
+    FxPage prePage { p, FxStage::pre, "INPUT", "AMP" }, eqPage { p, FxStage::eq, "AMP", "CAB" },
+        postPage { p, FxStage::post, "CAB", "OUTPUT" };
     IconButton tunerButton { "TUNER", IconButton::tuner }, metroButton { "METRO", IconButton::metronome },
         libraryButton { "LIBRARY", IconButton::folder }, audioButton { "AUDIO", IconButton::audio };
     ChannelSwitch inputSwitch;
