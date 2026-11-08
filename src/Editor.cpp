@@ -797,6 +797,8 @@ public:
         auto& dm = holder.deviceManager;
         const auto setup = dm.getAudioDeviceSetup();
         auto* type = dm.getCurrentDeviceTypeObject();
+        if (type != nullptr)
+            type->scanForDevices(); // interfaces plugged in after launch
         separate = type == nullptr || type->hasSeparateInputsAndOutputs();
         auto fill = [&](juce::ComboBox& box, bool input, const juce::String& current)
         {
