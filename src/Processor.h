@@ -24,7 +24,7 @@ struct FxInfo
 inline constexpr FxInfo fxChain[] = {
     { "comp", "Compressor", FxStage::pre }, { "octaver", "Octaver", FxStage::pre },  { "drive", "Drive", FxStage::pre },
     { "preDelay", "Delay", FxStage::pre },  { "eq", "EQ", FxStage::eq },             { "chorus", "Chorus", FxStage::post },
-    { "postDelay", "Delay", FxStage::post }, { "reverb", "Reverb", FxStage::post },  { "transpose", "Transpose", FxStage::post },
+    { "postDelay", "Delay", FxStage::post }, { "reverb", "Reverb", FxStage::post },
     { "doubler", "Doubler", FxStage::post },
 };
 inline constexpr int numFx = (int)std::size(fxChain);
@@ -105,7 +105,7 @@ private:
     juce::AudioBuffer<float> dry, slotBuf;
 
     std::array<std::atomic<float>*, 6> knob {};
-    std::atomic<float> *input, *output, *inputSource, *gate, *metroOn, *bpm, *beats, *metroLevel;
+    std::atomic<float> *input, *output, *inputSource, *gate, *transpose, *metroOn, *bpm, *beats, *metroLevel;
 
     void addMetronome(juce::AudioBuffer<float>&, int numOut);
     void runFx(FxStage, juce::AudioBuffer<float>&, int numChannels);

@@ -56,6 +56,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout(const std::vector
     l.add(std::make_unique<AudioParameterFloat>(ParameterID { "gate", 1 }, "Gate", NormalisableRange<float>(-100.0f, 0.0f, 0.5f), -100.0f,
                                                 AudioParameterFloatAttributes().withLabel("dB").withStringFromValueFunction(
                                                     [](float v, int) { return v <= -99.9f ? String("Off") : String(v, 1); })));
+    l.add(std::make_unique<AudioParameterInt>(ParameterID { "transpose", 1 }, "Transpose", -12, 12, 0,
+                                              AudioParameterIntAttributes().withLabel("st").withStringFromValueFunction(
+                                                  [](int v, int) { return v == 0 ? String("Off") : (v > 0 ? "+" : "") + String(v); })));
     l.add(db("output", "Output", -24.0f, 12.0f, 0.0f));
 
     for (int s = 1; s <= MJRAmpProcessor::numIrSlots; ++s)
@@ -91,6 +94,7 @@ MJRAmpProcessor::MJRAmpProcessor()
     output = params.getRawParameterValue("output");
     inputSource = params.getRawParameterValue("inputSource");
     gate = params.getRawParameterValue("gate");
+    transpose = params.getRawParameterValue("transpose");
     metroOn = params.getRawParameterValue("metroOn");
     for (int i = 0; i < numFx; ++i)
         fxOn[(size_t)i] = params.getRawParameterValue(juce::String(fxChain[i].id) + "On");
@@ -259,6 +263,9 @@ void MJRAmpProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         juce::dsp::AudioBlock<float> block(&mono, 1, (size_t)n);
         noiseGate.process(juce::dsp::ProcessContextReplacing<float>(block));
     }
+
+    // ponytail: transpose is a placeholder pass-through; pitch shifter (e.g. signalsmith-stretch, MIT) goes here, right after the gate.
+    juce::ignoreUnused(transpose);
 
     runFx(FxStage::pre, buffer, 1);
 

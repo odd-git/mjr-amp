@@ -853,7 +853,7 @@ public:
     static constexpr int baseW = 1280, baseH = 900; // laid out at this size, scaled to the window
 
     Editor(MJRAmpProcessor& proc)
-        : AudioProcessorEditor(proc), p(proc), rig(proc), tuner(proc), input(proc.params, "input", "INPUT"), gate(proc.params, "gate", "GATE"),
+        : AudioProcessorEditor(proc), p(proc), rig(proc), tuner(proc), input(proc.params, "input", "INPUT"), gate(proc.params, "gate", "GATE"), transpose(proc.params, "transpose", "TRANSPOSE"),
           output(proc.params, "output", "OUTPUT")
     {
         setLookAndFeel(&look);
@@ -932,7 +932,7 @@ public:
         for (int s = 0; s < MJRAmpProcessor::numIrSlots; ++s)
             irs.add(new IrBlock(p, s));
 
-        for (juce::Component* c : { (juce::Component*)&title, (juce::Component*)&input, (juce::Component*)&gate, (juce::Component*)&inputSwitch, (juce::Component*)&output, (juce::Component*)&inMeter,
+        for (juce::Component* c : { (juce::Component*)&title, (juce::Component*)&input, (juce::Component*)&gate, (juce::Component*)&transpose, (juce::Component*)&inputSwitch, (juce::Component*)&output, (juce::Component*)&inMeter,
                                     (juce::Component*)&outMeter, (juce::Component*)&tunerButton, (juce::Component*)&metroButton,
                                     (juce::Component*)&libraryButton, (juce::Component*)&prevCapture, (juce::Component*)&capture,
                                     (juce::Component*)&nextCapture, (juce::Component*)&captureLabel, (juce::Component*)&captured,
@@ -992,17 +992,18 @@ private:
 
         inMeter.setBounds(34, 60, 6, 140);
         input.setBounds(60, 56, 130, 150);
-        gate.setBounds(196, 86, 92, 120);
-        inputSwitch.setBounds(296, 120, 90, 50);
+        gate.setBounds(190, 86, 86, 120);
+        transpose.setBounds(278, 86, 86, 120);
+        inputSwitch.setBounds(370, 120, 80, 50);
         output.setBounds(baseW - 190, 56, 130, 150);
         outMeter.setBounds(baseW - 40, 60, 6, 140);
 
-        prevCapture.setBounds(400, 88, 32, 34);
-        capture.setBounds(438, 88, 404, 34);
-        nextCapture.setBounds(848, 88, 32, 34);
-        captureLabel.setBounds(438, 126, 404, 18);
-        captured.setBounds(380, 146, 520, 18);
-        resetKnobs.setBounds(585, 170, 110, 26);
+        prevCapture.setBounds(468, 88, 32, 34);
+        capture.setBounds(506, 88, 360, 34);
+        nextCapture.setBounds(872, 88, 32, 34);
+        captureLabel.setBounds(506, 126, 360, 18);
+        captured.setBounds(436, 146, 500, 18);
+        resetKnobs.setBounds(631, 170, 110, 26);
 
         for (int s = 0; s < irs.size(); ++s)
             irs[s]->setBounds(s < 2 ? 30 : baseW - 230, 250 + (s % 2) * 300, 200, 230);
@@ -1127,7 +1128,7 @@ private:
     Rig rig;
     TunerView tuner;
     juce::OwnedArray<IrBlock> irs;
-    LabeledKnob input, gate, output;
+    LabeledKnob input, gate, transpose, output;
     Meter inMeter, outMeter;
     std::unique_ptr<juce::FileChooser> chooser;
     int shownCapture = -1, shownBeat = 0;
