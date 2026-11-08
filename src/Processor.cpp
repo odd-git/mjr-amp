@@ -66,6 +66,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout(const std::vector
         l.add(std::make_unique<AudioParameterFloat>(ParameterID { p + "Pan", 1 }, "IR " + String(s) + " Pan",
                                                     NormalisableRange<float>(-1.0f, 1.0f, 0.01f), 0.0f));
     }
+    for (auto& fx : fxChain)
+        l.add(std::make_unique<AudioParameterBool>(ParameterID { String(fx.id) + "On", 1 },
+                                                   String(fx.name) + (fx.stage == FxStage::pre ? " (pre)" : fx.stage == FxStage::post ? " (post)" : ""),
+                                                   false));
     l.add(std::make_unique<AudioParameterBool>(ParameterID { "metroOn", 1 }, "Metronome", false));
     l.add(std::make_unique<AudioParameterFloat>(ParameterID { "bpm", 1 }, "Tempo", NormalisableRange<float>(30.0f, 300.0f, 1.0f), 120.0f,
                                                 AudioParameterFloatAttributes().withLabel("BPM")));
@@ -88,6 +92,8 @@ MJRAmpProcessor::MJRAmpProcessor()
     inputSource = params.getRawParameterValue("inputSource");
     gate = params.getRawParameterValue("gate");
     metroOn = params.getRawParameterValue("metroOn");
+    for (int i = 0; i < numFx; ++i)
+        fxOn[(size_t)i] = params.getRawParameterValue(juce::String(fxChain[i].id) + "On");
     bpm = params.getRawParameterValue("bpm");
     beats = params.getRawParameterValue("beats");
     metroLevel = params.getRawParameterValue("metroLevel");
@@ -254,6 +260,8 @@ void MJRAmpProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         noiseGate.process(juce::dsp::ProcessContextReplacing<float>(block));
     }
 
+    runFx(FxStage::pre, buffer, 1);
+
     driveGain.setTargetValue(juce::Decibels::decibelsToGain(input->load() + driveDb));
     driveGain.applyGain(mono, n);
 
@@ -266,6 +274,8 @@ void MJRAmpProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         for (auto& f : eq)
             f.process(ctx);
     }
+
+    runFx(FxStage::eq, buffer, 1);
 
     // Cab: sum of the active IR slots, each with level and constant-power pan.
     dry.copyFrom(0, 0, mono, n);
@@ -295,6 +305,8 @@ void MJRAmpProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         for (int ch = 0; ch < numOut; ++ch)
             buffer.copyFrom(ch, 0, dry, 0, 0, n);
 
+    runFx(FxStage::post, buffer, numOut);
+
     outGain.setTargetValue(juce::Decibels::decibelsToGain(output->load()));
     for (int i = 0; i < n; ++i)
     {
@@ -309,6 +321,17 @@ void MJRAmpProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
             buffer.clear(ch, 0, n);
     addMetronome(buffer, numOut);
     outputPeak = std::max(outputPeak.load(), buffer.getMagnitude(0, n));
+}
+
+void MJRAmpProcessor::runFx(FxStage stage, juce::AudioBuffer<float>& buffer, int numChannels)
+{
+    for (int i = 0; i < numFx; ++i)
+        if (fxChain[i].stage == stage && fxOn[(size_t)i]->load() > 0.5f)
+        {
+            // ponytail: placeholder, audio passes through unchanged. Each module gets its DSP
+            // (and its own parameters) when the real effect is chosen.
+            juce::ignoreUnused(buffer, numChannels);
+        }
 }
 
 int MJRAmpProcessor::copyTunerInput(float* dest, int n) const

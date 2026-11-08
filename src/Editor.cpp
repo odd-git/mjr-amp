@@ -160,7 +160,7 @@ struct LabeledKnob : juce::Component
 // Top-bar button: drawn icon with its caption underneath.
 struct IconButton : juce::Button
 {
-    enum Icon { tuner, metronome, folder, audio };
+    enum Icon { tuner, metronome, folder, audio, pedal, amp, eq };
     IconButton(const juce::String& caption, Icon i) : juce::Button(caption), icon(i) {}
     bool lit = false; // metronome beat light
     bool downbeat = false;
@@ -201,6 +201,27 @@ struct IconButton : juce::Button
                 p.lineTo(b.getX() + 10, b.getY() + 20);
                 p.addCentredArc(b.getX() + 18, b.getCentreY(), 6, 6, 0, 0.6f, 2.55f, true);
                 p.addCentredArc(b.getX() + 18, b.getCentreY(), 11, 11, 0, 0.6f, 2.55f, true);
+                break;
+            case pedal: // stompbox
+                p.addRoundedRectangle(b.getX() + 6, b.getY() + 1, 18, 28, 3);
+                p.addEllipse(b.getCentreX() - 4, b.getBottom() - 11, 8, 8);
+                p.addEllipse(b.getX() + 10, b.getY() + 5, 4, 4);
+                p.addEllipse(b.getRight() - 14, b.getY() + 5, 4, 4);
+                break;
+            case amp: // head on a cab
+                p.addRoundedRectangle(b.getX() + 1, b.getY() + 2, 28, 9, 2);
+                p.addRoundedRectangle(b.getX() + 1, b.getY() + 13, 28, 16, 2);
+                p.addEllipse(b.getX() + 5, b.getY() + 16, 9, 9);
+                p.addEllipse(b.getRight() - 14, b.getY() + 16, 9, 9);
+                break;
+            case eq: // sliders
+                for (int k = 0; k < 3; ++k)
+                {
+                    const float x = b.getX() + 6 + 9.0f * (float)k, y = b.getY() + (k == 1 ? 18.0f : k == 0 ? 8.0f : 13.0f);
+                    p.startNewSubPath(x, b.getY() + 1);
+                    p.lineTo(x, b.getBottom() - 1);
+                    p.addRectangle(x - 3, y, 6, 4);
+                }
                 break;
             case folder:
                 p.startNewSubPath(b.getX() + 1, b.getY() + 5);
@@ -243,6 +264,95 @@ struct ChannelSwitch : juce::ToggleButton
         g.drawRoundedRectangle(pill.reduced(1), 11, 2);
         g.fillEllipse(juce::Rectangle<float>(14, 14).withCentre({ two ? pill.getRight() - 11 : pill.getX() + 11, pill.getCentreY() }));
     }
+};
+
+// Placeholder effect pedal: name, LED, footswitch. Click toggles the module on/off.
+struct Pedal : juce::ToggleButton
+{
+    Pedal(juce::AudioProcessorValueTreeState& params, const FxInfo& fx, juce::Colour c)
+        : juce::ToggleButton(fx.name), colour(c), attachment(params, juce::String(fx.id) + "On", *this)
+    {
+        setTooltip(juce::String(fx.name) + " (placeholder: audio passes through)");
+    }
+    void paintButton(juce::Graphics& g, bool over, bool) override
+    {
+        auto r = getLocalBounds().toFloat().reduced(4);
+        g.setColour(juce::Colours::black.withAlpha(0.5f));
+        g.fillRoundedRectangle(r.translated(3, 5), 12);
+        g.setGradientFill(juce::ColourGradient(colour.brighter(0.15f), r.getX(), r.getY(), colour.darker(0.5f), r.getX(), r.getBottom(), false));
+        g.fillRoundedRectangle(r, 12);
+        if (over)
+        {
+            g.setColour(juce::Colours::white.withAlpha(0.25f));
+            g.drawRoundedRectangle(r, 12, 2);
+        }
+        const bool on = getToggleState();
+        const auto led = juce::Rectangle<float>(12, 12).withCentre({ r.getCentreX(), r.getY() + 24 });
+        g.setColour(on ? juce::Colour(0xffff3b30) : juce::Colour(0xff3a1210));
+        g.fillEllipse(led);
+        if (on)
+        {
+            g.setColour(juce::Colour(0x55ff3b30));
+            g.fillEllipse(led.expanded(6));
+        }
+        g.setColour(juce::Colours::white);
+        g.setFont(juce::FontOptions(18.0f, juce::Font::bold));
+        g.drawText(getName().toUpperCase(), r.withTrimmedTop(44).removeFromTop(30), juce::Justification::centred);
+        g.setColour(juce::Colours::white.withAlpha(0.55f));
+        g.setFont(juce::FontOptions(11.0f));
+        g.drawText("placeholder", r.withTrimmedTop(74).removeFromTop(16), juce::Justification::centred);
+        const auto sw = juce::Rectangle<float>(46, 46).withCentre({ r.getCentreX(), r.getBottom() - 44 });
+        g.setGradientFill(juce::ColourGradient(juce::Colour(0xffe8e8e8), sw.getX(), sw.getY(), juce::Colour(0xff6a6a6a), sw.getRight(), sw.getBottom(), false));
+        g.fillEllipse(sw);
+        g.setColour(juce::Colour(0xff2a2a2a));
+        g.drawEllipse(sw, 2);
+        g.setColour(juce::Colours::white.withAlpha(0.8f));
+        g.setFont(juce::FontOptions(12.0f, juce::Font::bold));
+        g.drawText(on ? "ON" : "OFF", r.removeFromBottom(14), juce::Justification::centred);
+    }
+    juce::Colour colour;
+    juce::AudioProcessorValueTreeState::ButtonAttachment attachment;
+};
+
+// A page of pedals for one stage of the chain, laid out left to right in signal order.
+class FxPage : public juce::Component
+{
+public:
+    FxPage(juce::AudioProcessorValueTreeState& params, FxStage stage, juce::String from, juce::String to)
+        : source(std::move(from)), destination(std::move(to))
+    {
+        const juce::Colour palette[] = { juce::Colour(0xff2f5d8c), juce::Colour(0xff6b3fa0), juce::Colour(0xffb5651d), juce::Colour(0xff2e7d6b),
+                                         juce::Colour(0xff7a7a2a), juce::Colour(0xff3d6fb0), juce::Colour(0xff8c2f4f), juce::Colour(0xff4a4a8c),
+                                         juce::Colour(0xff9c4a1a), juce::Colour(0xff2a7a8c) };
+        for (int i = 0; i < numFx; ++i)
+            if (fxChain[i].stage == stage)
+                addAndMakeVisible(*pedals.add(new Pedal(params, fxChain[i], palette[i % 10])));
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        if (pedals.isEmpty())
+            return;
+        const float y = (float)pedals[0]->getBounds().getCentreY();
+        g.setColour(col::line);
+        g.drawLine(40, y, (float)getWidth() - 40, y, 3);
+        g.setColour(col::dim);
+        g.setFont(juce::FontOptions(12.0f, juce::Font::bold));
+        g.drawText(source, juce::Rectangle<float>(0, y - 40, 120, 20), juce::Justification::centred);
+        g.drawText(destination, juce::Rectangle<float>((float)getWidth() - 120, y - 40, 120, 20), juce::Justification::centred);
+    }
+
+    void resized() override
+    {
+        const int w = 170, gap = 40, total = pedals.size() * w + (pedals.size() - 1) * gap;
+        int x = (getWidth() - total) / 2;
+        for (auto* p : pedals)
+            p->setBounds(x, getHeight() / 2 - 140, w, 270), x += w + gap;
+    }
+
+private:
+    juce::OwnedArray<Pedal> pedals;
+    juce::String source, destination;
 };
 
 // The rig: amp head (photo or drawn) standing on a drawn cabinet. The cabinet's top band
@@ -714,6 +824,19 @@ public:
             content.addAndMakeVisible(c);
         for (auto* b : irs)
             content.addAndMakeVisible(b);
+        for (auto* page : { &prePage, &eqPage, &postPage })
+            content.addChildComponent(page);
+        int n = 0;
+        for (auto* b : { &preNav, &ampNav, &eqNav, &postNav })
+        {
+            b->setClickingTogglesState(true);
+            b->setRadioGroupId(2);
+            b->onClick = [this] { showPage(); };
+            b->setTooltip(n == 0 ? "Pre effects" : n == 1 ? "Amp and cab" : n == 2 ? "EQ" : "Post effects");
+            content.addAndMakeVisible(b);
+            ++n;
+        }
+        ampNav.setToggleState(true, juce::dontSendNotification);
         content.addChildComponent(tuner);
         layout();
         refreshCapture();
@@ -744,11 +867,12 @@ private:
     void layout()
     {
         title.setBounds(20, 8, 120, 20);
-        const int iconsX = audioButton.isVisible() ? 500 : 535;
-        tunerButton.setBounds(iconsX, 8, 70, 58);
-        metroButton.setBounds(iconsX + 70, 8, 70, 58);
-        libraryButton.setBounds(iconsX + 140, 8, 70, 58);
-        audioButton.setBounds(iconsX + 210, 8, 70, 58);
+        int x = baseW / 2 - 140; // page navigation, in signal order
+        for (auto* b : { &preNav, &ampNav, &eqNav, &postNav })
+            b->setBounds(x, 8, 70, 58), x += 70;
+        x = 14; // utilities, bottom left
+        for (auto* b : { &tunerButton, &metroButton, &libraryButton, &audioButton })
+            b->setBounds(x, baseH - 72, 56, 58), x += 56;
 
         inMeter.setBounds(34, 60, 6, 140);
         input.setBounds(60, 56, 130, 150);
@@ -768,7 +892,20 @@ private:
             irs[s]->setBounds(s < 2 ? 30 : baseW - 230, 250 + (s % 2) * 300, 200, 230);
 
         rig.setBounds(240, 236, 800, baseH - 236);
-        tuner.setBounds(rig.getBounds());
+        for (auto* page : { &prePage, &eqPage, &postPage })
+            page->setBounds(0, 236, baseW, baseH - 236 - 80);
+        tuner.setBounds(0, 236, baseW, baseH - 236 - 80);
+    }
+
+    void showPage()
+    {
+        const bool amp = ampNav.getToggleState();
+        rig.setVisible(amp);
+        for (auto* b : irs)
+            b->setVisible(amp);
+        prePage.setVisible(preNav.getToggleState());
+        eqPage.setVisible(eqNav.getToggleState());
+        postPage.setVisible(postNav.getToggleState());
     }
 
     static juce::String channelName(const Capture& c) { return c.channel == "I" ? "Channel I" : "Channels I + II"; }
@@ -863,6 +1000,10 @@ private:
     std::vector<int> order;
     juce::ComboBox capture;
     juce::TextButton prevCapture, nextCapture, resetKnobs;
+    IconButton preNav { "PRE FX", IconButton::pedal }, ampNav { "AMP", IconButton::amp }, eqNav { "EQ", IconButton::eq },
+        postNav { "POST FX", IconButton::pedal };
+    FxPage prePage { p.params, FxStage::pre, "INPUT", "AMP" }, eqPage { p.params, FxStage::eq, "AMP", "CAB" },
+        postPage { p.params, FxStage::post, "CAB", "OUTPUT" };
     IconButton tunerButton { "TUNER", IconButton::tuner }, metroButton { "METRO", IconButton::metronome },
         libraryButton { "LIBRARY", IconButton::folder }, audioButton { "AUDIO", IconButton::audio };
     ChannelSwitch inputSwitch;

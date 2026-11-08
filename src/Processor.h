@@ -12,6 +12,23 @@ struct Capture
     juce::String displayName() const { return channel + " " + level + " " + voicing + (pedal.isEmpty() ? "" : " " + pedal); }
 };
 
+// Effect modules, in signal-chain order (same chain as Archetype: Plini X).
+// For now every module is a placeholder that passes audio through unchanged.
+enum class FxStage { pre, eq, post };
+struct FxInfo
+{
+    const char* id;
+    const char* name;
+    FxStage stage;
+};
+inline constexpr FxInfo fxChain[] = {
+    { "comp", "Compressor", FxStage::pre }, { "octaver", "Octaver", FxStage::pre },  { "drive", "Drive", FxStage::pre },
+    { "preDelay", "Delay", FxStage::pre },  { "eq", "EQ", FxStage::eq },             { "chorus", "Chorus", FxStage::post },
+    { "postDelay", "Delay", FxStage::post }, { "reverb", "Reverb", FxStage::post },  { "transpose", "Transpose", FxStage::post },
+    { "doubler", "Doubler", FxStage::post },
+};
+inline constexpr int numFx = (int)std::size(fxChain);
+
 class MJRAmpProcessor;
 juce::AudioProcessorEditor* createMJREditor(MJRAmpProcessor&);
 
@@ -91,6 +108,8 @@ private:
     std::atomic<float> *input, *output, *inputSource, *gate, *metroOn, *bpm, *beats, *metroLevel;
 
     void addMetronome(juce::AudioBuffer<float>&, int numOut);
+    void runFx(FxStage, juce::AudioBuffer<float>&, int numChannels);
+    std::array<std::atomic<float>*, numFx> fxOn {};
     double metroSamples = 0; // free-running position, in samples since the last beat
     int metroBeat = -1;
     int clickPos = 1 << 30;

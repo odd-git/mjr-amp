@@ -252,6 +252,28 @@ int main(int argc, char** argv)
         CHECK(loudGated > onCh2 * 0.5f, "gate cuts the playing");
     }
 
+    // 9. Effect placeholders: switched on, the chain is still bit-identical.
+    {
+        juce::AudioBuffer<float> outs[2];
+        for (int on = 0; on < 2; ++on)
+        {
+            MJRAmpProcessor p;
+            p.setLibraryDir(lib);
+            for (auto& fx : fxChain)
+                setParam(p, (juce::String(fx.id) + "On").toRawUTF8(), (float)on);
+            p.prepareToPlay(48000, block);
+            waitIdle(p, block);
+            outs[on].setSize(2, 24000);
+            outs[on].clear();
+            outs[on].copyFrom(0, 0, di, 0, di.getNumSamples() / 2, 24000);
+            run(p, outs[on], block);
+        }
+        float diff = 0;
+        for (int i = 0; i < 24000; ++i)
+            diff = std::max(diff, std::abs(outs[0].getSample(1, i) - outs[1].getSample(1, i)));
+        CHECK(diff < 1e-6f, "placeholder effects changed the audio: " << diff);
+    }
+
     // 5. Optional: editor snapshots, mjr-test <lib> <DI> <out dir>
     if (argc > 3)
     {
@@ -268,19 +290,29 @@ int main(int argc, char** argv)
             juce::PNGImageFormat().writeImageToStream(ed->createComponentSnapshot(ed->getLocalBounds(), true, 1.0f), os);
         };
         save("main.png");
-        std::function<juce::Button*(juce::Component*)> find = [&](juce::Component* c) -> juce::Button*
+        std::function<juce::Button*(juce::Component*, const juce::String&)> find = [&](juce::Component* c, const juce::String& text) -> juce::Button*
         {
             for (auto* ch : c->getChildren())
             {
-                if (auto* b = dynamic_cast<juce::Button*>(ch); b != nullptr && b->getButtonText() == "TUNER")
+                if (auto* b = dynamic_cast<juce::Button*>(ch); b != nullptr && b->getButtonText() == text)
                     return b;
-                if (auto* b = find(ch))
+                if (auto* b = find(ch, text))
                     return b;
             }
             return nullptr;
         };
-        if (auto* b = find(ed.get()))
-            b->setToggleState(true, juce::dontSendNotification), b->onClick();
+        auto click = [&](const juce::String& text)
+        {
+            if (auto* b = find(ed.get(), text))
+                { b->setToggleState(!b->getToggleState() || b->getRadioGroupId() != 0, juce::sendNotificationSync); if (b->onClick) b->onClick(); }
+        };
+        click("PRE FX");
+        click("Drive"); // a pedal switched on
+        save("pre.png");
+        click("POST FX");
+        save("post.png");
+        click("AMP");
+        click("TUNER");
         save("tuner.png");
         std::cout << "snapshots in " << outDir.getFullPathName() << "\n";
     }
