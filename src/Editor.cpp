@@ -814,7 +814,18 @@ static void preferJack(juce::StandalonePluginHolder& holder)
     if (usableDevices(*jack, false).isEmpty())
         return;
     if (dm.getCurrentAudioDeviceType() != "JACK")
+    {
         dm.setCurrentAudioDeviceType("JACK", true);
+        // First switch: JACK opens its first client as input (often the laptop mic). A guitar
+        // interface is both input and output, so take the input from the same device as the output.
+        auto s = dm.getAudioDeviceSetup();
+        if (s.inputDeviceName != s.outputDeviceName && jack->getDeviceNames(true).contains(s.outputDeviceName))
+        {
+            s.inputDeviceName = s.outputDeviceName;
+            dm.setAudioDeviceSetup(s, true);
+        }
+        holder.saveAudioDeviceState();
+    }
     if (dm.getCurrentAudioDevice() != nullptr)
         dm.removeAudioDeviceType(alsa);
     if (const int q = holder.settings != nullptr ? holder.settings->getIntValue("pipewireQuantum") : 0; q > 0 && pipeWireBuffer(dm))
@@ -903,6 +914,7 @@ private:
         s.outputDeviceName = separate ? out.getText() : in.getText();
         s.useDefaultInputChannels = s.useDefaultOutputChannels = true;
         const auto err = dm.setAudioDeviceSetup(s, true);
+        holder.saveAudioDeviceState(); // JUCE only saves on a clean quit
         status.setText(err.isEmpty() ? "OK" : err, juce::dontSendNotification);
     }
 
