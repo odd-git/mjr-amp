@@ -371,10 +371,12 @@ private:
 
 // The rig: amp head (photo or drawn) standing on a drawn cabinet. The cabinet's top band
 // names each amp knob and shows its value, right under the knob.
-class Rig : public juce::Component
+class Rig : public juce::Component, public juce::TooltipClient
 {
 public:
     Rig(MJRAmpProcessor& p)
+        : proc(p), ampAtt(*p.params.getParameter("ampOn"), [this](float) { repaint(); }),
+          captureAtt(*p.params.getParameter("capture"), [this](float) { repaint(); })
     {
 #if MJR_HAS_PHOTO
         photo = juce::ImageCache::getFromMemory(BinaryData::amp_png, BinaryData::amp_pngSize);
@@ -401,6 +403,7 @@ public:
             g.drawImage(photo, area);
         else
             paintDrawnHead(g, area);
+        paintPanelControls(g);
 
         const char* names[] = { "PRESENCE", "BASS", "MIDDLE", "TREBLE", "VOL I", "VOL II" };
         for (int i = 0; i < 6; ++i)
@@ -425,7 +428,136 @@ public:
         missing.setBounds(area.reduced(area.getWidth() * 0.25f, area.getHeight() * 0.3f).toNearestInt());
     }
 
+    // The panel's own controls: the two toggle switches power the amp on/off (off = pedals straight
+    // to the cab), the input jacks pick the channel: cable in I, or I with a jumper to II (JU).
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        const auto h = hotspot(e.position);
+        if (h == Hot::power)
+        {
+            auto* prm = proc.params.getParameter("ampOn");
+            prm->setValueNotifyingHost(prm->getValue() > 0.5f ? 0.0f : 1.0f);
+        }
+        else if (h == Hot::inputs)
+            switchChannel();
+    }
+    void mouseMove(const juce::MouseEvent& e) override
+    {
+        hover = hotspot(e.position);
+        setMouseCursor(hover == Hot::none ? juce::MouseCursor::NormalCursor : juce::MouseCursor::PointingHandCursor);
+    }
+    juce::String getTooltip() override
+    {
+        return hover == Hot::power ? "Amp on/off (off: pedals go straight to the cab)"
+             : hover == Hot::inputs ? "Channel: input I, or I jumped to II (JU)"
+                                    : juce::String();
+    }
+
 private:
+    enum class Hot { none, power, inputs };
+    Hot hotspot(juce::Point<float> pos) const
+    {
+        const auto a = head();
+        const float x = (pos.x - a.getX()) / a.getWidth() * panelW, y = (pos.y - a.getY()) / a.getHeight() * panelH;
+        if (y < 285 || y > 360)
+            return Hot::none;
+        return x > 270 && x < 372 ? Hot::power : x > 715 && x < 810 ? Hot::inputs : Hot::none;
+    }
+    juce::Point<float> at(float x, float y) const
+    {
+        const auto a = head();
+        return { a.getX() + x / panelW * a.getWidth(), a.getY() + y / panelH * a.getHeight() };
+    }
+    const Capture* current() const
+    {
+        const int i = ((juce::AudioParameterChoice*)proc.params.getParameter("capture"))->getIndex();
+        return i >= 0 && i < (int)proc.captures.size() ? &proc.captures[(size_t)i] : nullptr;
+    }
+    // Same level/voicing/pedal on the other channel if it was captured, else the closest match.
+    void switchChannel()
+    {
+        const auto* c = current();
+        if (c == nullptr)
+            return;
+        const juce::String target = c->channel == "I" ? "JU" : "I";
+        int best = -1, bestScore = -1;
+        for (int i = 0; i < (int)proc.captures.size(); ++i)
+        {
+            const auto& o = proc.captures[(size_t)i];
+            if (o.channel != target)
+                continue;
+            const int score = (o.level == c->level) * 4 + (o.voicing == c->voicing) * 2 + (o.pedal == c->pedal);
+            if (score > bestScore)
+                best = i, bestScore = score;
+        }
+        if (best >= 0)
+        {
+            auto* prm = proc.params.getParameter("capture");
+            prm->setValueNotifyingHost(prm->convertTo0to1((float)best));
+        }
+    }
+
+    void paintPanelControls(juce::Graphics& g)
+    {
+        const float s = head().getWidth() / panelW;
+        const bool on = proc.params.getParameter("ampOn")->getValue() > 0.5f;
+
+        for (float x : { 288.0f, 324.0f }) // toggle levers: up = on
+        {
+            const auto c = at(x, 317);
+            const auto nut = juce::Rectangle<float>(17 * s, 17 * s).withCentre(c);
+            g.setGradientFill(juce::ColourGradient(juce::Colour(0xffeeeeee), nut.getX(), nut.getY(), juce::Colour(0xff555555), nut.getRight(), nut.getBottom(), false));
+            g.fillEllipse(nut);
+            g.setColour(juce::Colour(0xff222222));
+            g.drawEllipse(nut, 1.0f * s);
+            const auto tip = c.translated(0, (on ? -14.0f : 14.0f) * s);
+            g.setColour(juce::Colour(0xffd0d0d0));
+            g.drawLine({ c, tip }, 4.0f * s);
+            g.fillEllipse(juce::Rectangle<float>(7 * s, 7 * s).withCentre(tip));
+        }
+        const auto lamp = juce::Rectangle<float>(15 * s, 21 * s).withCentre(at(359.5f, 320.5f));
+        if (on)
+        {
+            g.setColour(juce::Colour(0x55ff2a1a));
+            g.fillEllipse(lamp.expanded(10 * s));
+            g.setColour(juce::Colour(0xffff4a36));
+            g.fillRoundedRectangle(lamp.reduced(2 * s), 2 * s);
+        }
+        else
+        {
+            g.setColour(juce::Colour(0xff2a0806));
+            g.fillRoundedRectangle(lamp, 2 * s);
+        }
+
+        const auto* c = current();
+        auto plug = [&](juce::Point<float> p)
+        {
+            const auto r = juce::Rectangle<float>(15 * s, 15 * s).withCentre(p);
+            g.setGradientFill(juce::ColourGradient(juce::Colour(0xfff0f0f0), r.getX(), r.getY(), juce::Colour(0xff606060), r.getRight(), r.getBottom(), false));
+            g.fillEllipse(r);
+            g.setColour(juce::Colour(0xff1a1a1a));
+            g.fillEllipse(r.reduced(4 * s));
+        };
+        auto cable = [&](juce::Point<float> a, juce::Point<float> c1, juce::Point<float> c2, juce::Point<float> b, juce::Colour colour)
+        {
+            juce::Path p;
+            p.startNewSubPath(a);
+            p.cubicTo(c1, c2, b);
+            g.setColour(colour);
+            g.strokePath(p, juce::PathStrokeType(6.0f * s, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            g.setColour(juce::Colours::white.withAlpha(0.18f));
+            g.strokePath(p, juce::PathStrokeType(1.5f * s));
+        };
+        cable(at(735, 303), at(740, 360), at(770, 395), at(805, 430), juce::Colour(0xff151515)); // guitar lead, into I
+        plug(at(735, 303));
+        if (c != nullptr && c->channel == "JU") // jumper: I low -> II high
+        {
+            cable(at(735, 338), at(760, 372), at(820, 345), at(790, 303), juce::Colour(0xff8a2a22));
+            plug(at(735, 338));
+            plug(at(790, 303));
+        }
+    }
+
     juce::Rectangle<float> head() const
     {
         const float w = (float)getWidth();
@@ -501,6 +633,9 @@ private:
             }
     }
 
+    MJRAmpProcessor& proc;
+    juce::ParameterAttachment ampAtt, captureAtt;
+    Hot hover = Hot::none;
     juce::Image photo;
     juce::OwnedArray<Knob> knobs;
     juce::Rectangle<float> band;
@@ -878,8 +1013,10 @@ public:
         advanced.setButtonText("Advanced...");
         advanced.onClick = [this] { holder.showAudioSettingsDialog(); };
         for (juce::Component* c : { (juce::Component*)&inLabel, (juce::Component*)&in, (juce::Component*)&bufLabel, (juce::Component*)&buffer,
-                                    (juce::Component*)&advanced, (juce::Component*)&status })
+                                    (juce::Component*)&status })
             addAndMakeVisible(c);
+        addChildComponent(advanced); // JUCE's page can't set the buffer under JACK and only confuses there
+        advanced.setVisible(!pipeWireBuffer(dm));
         if (separate)
         {
             addAndMakeVisible(outLabel);

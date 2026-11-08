@@ -60,6 +60,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout(const std::vector
     l.add(std::make_unique<AudioParameterInt>(ParameterID { "transpose", 1 }, "Transpose", -12, 12, 0,
                                               AudioParameterIntAttributes().withLabel("st").withStringFromValueFunction(
                                                   [](int v, int) { return v == 0 ? String("Off") : (v > 0 ? "+" : "") + String(v); })));
+    l.add(std::make_unique<AudioParameterBool>(ParameterID { "ampOn", 1 }, "Amp On", true));
     l.add(db("output", "Output", -24.0f, 12.0f, 0.0f));
 
     for (int s = 1; s <= MJRAmpProcessor::numIrSlots; ++s)
@@ -102,6 +103,7 @@ MJRAmpProcessor::MJRAmpProcessor()
     inputSource = params.getRawParameterValue("inputSource");
     gate = params.getRawParameterValue("gate");
     transpose = params.getRawParameterValue("transpose");
+    ampOn = params.getRawParameterValue("ampOn");
     metroOn = params.getRawParameterValue("metroOn");
     for (int i = 0; i < numFx; ++i)
     {
@@ -287,12 +289,19 @@ void MJRAmpProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
     runFx(FxStage::pre, buffer, 1);
 
-    driveGain.setTargetValue(juce::Decibels::decibelsToGain(input->load() + driveDb));
+    // Amp switched off on the panel: the pedals go straight to the cab.
+    // ponytail: hard switch (may click); crossfade like the capture swap if it bothers.
+    const bool amp = ampOn->load() > 0.5f;
+    driveGain.setTargetValue(juce::Decibels::decibelsToGain(input->load() + (amp ? driveDb : 0.0f)));
     driveGain.applyGain(mono, n);
 
-    engine.process(mono, n);
+    if (amp)
+        engine.process(mono, n);
+    else
+        juce::FloatVectorOperations::multiply(mono, 0.25f, n); // -12 dB: a raw DI into the cab is far hotter than the levelled amp
 
     updateFilters();
+    if (amp)
     {
         juce::dsp::AudioBlock<float> block(&mono, 1, (size_t)n);
         juce::dsp::ProcessContextReplacing<float> ctx(block);

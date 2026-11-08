@@ -274,6 +274,22 @@ int main(int argc, char** argv)
             return b;
         };
         const auto off = render(nullptr);
+        {
+            MJRAmpProcessor p; // amp switched off on the panel: DI straight to the cab, still sound
+            p.setLibraryDir(lib);
+            setParam(p, "ampOn", 0.0f);
+            p.prepareToPlay(48000, block);
+            waitIdle(p, block);
+            juce::AudioBuffer<float> b(2, 48000);
+            b.clear();
+            b.copyFrom(0, 0, di, 0, di.getNumSamples() / 2, 48000);
+            run(p, b, block);
+            const float rms = b.getRMSLevel(1, 0, 48000);
+            std::cout << "amp off: rms " << rms << "\n";
+            const float onRms = off.getRMSLevel(1, 0, 48000);
+            CHECK(std::abs(rms - onRms) > 1e-4f, "amp off switch has no effect");
+            CHECK(rms > onRms * 0.5f && rms < onRms * 2.0f, "amp off level jumps: " << rms << " vs " << onRms);
+        }
         const float offRms = off.getRMSLevel(1, 0, 48000);
         std::cout << "output level, default rig: rms " << juce::Decibels::gainToDecibels(offRms) << " dBFS, peak "
                   << juce::Decibels::gainToDecibels(off.getMagnitude(0, 48000)) << " dBFS\n";
@@ -319,6 +335,16 @@ int main(int argc, char** argv)
             juce::PNGImageFormat().writeImageToStream(ed->createComponentSnapshot(ed->getLocalBounds(), true, 1.0f), os);
         };
         save("main.png");
+        {
+            const int cap = ((juce::AudioParameterChoice*)p.params.getParameter("capture"))->getIndex();
+            for (int i = 0; i < (int)p.captures.size(); ++i)
+                if (p.captures[(size_t)i].displayName() == "JU Crunch BAL")
+                    setParam(p, "capture", (float)i);
+            setParam(p, "ampOn", 0.0f);
+            save("amp-off-ju.png"); // lever down, lamp dark, jumper cable in
+            setParam(p, "ampOn", 1.0f);
+            setParam(p, "capture", (float)cap);
+        }
         std::function<juce::Button*(juce::Component*, const juce::String&)> find = [&](juce::Component* c, const juce::String& text) -> juce::Button*
         {
             for (auto* ch : c->getChildren())

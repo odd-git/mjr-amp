@@ -134,7 +134,7 @@ private:
     juce::AudioBuffer<float> dry, slotBuf;
 
     std::array<std::atomic<float>*, 6> knob {};
-    std::atomic<float> *input, *output, *inputSource, *gate, *transpose, *metroOn, *bpm, *beats, *metroLevel;
+    std::atomic<float> *input, *output, *inputSource, *gate, *transpose, *ampOn, *metroOn, *bpm, *beats, *metroLevel;
 
     void addMetronome(juce::AudioBuffer<float>&, int numOut);
     void runFx(FxStage, juce::AudioBuffer<float>&, int numChannels);
