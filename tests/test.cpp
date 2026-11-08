@@ -275,6 +275,10 @@ int main(int argc, char** argv)
         };
         const auto off = render(nullptr);
         const float offRms = off.getRMSLevel(1, 0, 48000);
+        std::cout << "output level, default rig: rms " << juce::Decibels::gainToDecibels(offRms) << " dBFS, peak "
+                  << juce::Decibels::gainToDecibels(off.getMagnitude(0, 48000)) << " dBFS\n";
+        const float peakDb = juce::Decibels::gainToDecibels(off.getMagnitude(0, 48000));
+        CHECK(peakDb > -14.0f && peakDb < -3.0f, "default output level off target: " << peakDb << " dBFS");
         for (auto& fx : fxChain)
         {
             const auto on = render(fx.id);

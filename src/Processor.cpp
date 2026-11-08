@@ -316,7 +316,9 @@ void MJRAmpProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         float* p = slotBuf.getWritePointer(0);
         juce::dsp::AudioBlock<float> block(&p, 1, (size_t)n);
         cab[s].process(juce::dsp::ProcessContextReplacing<float>(block));
-        const float g = juce::Decibels::decibelsToGain(irLevel[s]->load());
+        // JUCE normalises every IR to an energy of 0.125 (-18 dB). Win back 12 of those dB:
+        // the default rig (two IRs) then peaks around -8 dBFS, leaving headroom for hard picking.
+        const float g = 4.0f * juce::Decibels::decibelsToGain(irLevel[s]->load());
         if (numOut == 1)
             buffer.addFrom(0, 0, slotBuf, 0, 0, n, g);
         else
