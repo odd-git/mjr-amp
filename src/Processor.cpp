@@ -1,5 +1,6 @@
 #include "Processor.h"
 #include "BinaryData.h"
+#include "audioeffectx.h"
 
 namespace
 {
@@ -70,9 +71,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout(const std::vector
                                                     NormalisableRange<float>(-1.0f, 1.0f, 0.01f), 0.0f));
     }
     for (auto& fx : fxChain)
-        l.add(std::make_unique<AudioParameterBool>(ParameterID { String(fx.id) + "On", 1 },
-                                                   String(fx.name) + (fx.stage == FxStage::pre ? " (pre)" : fx.stage == FxStage::post ? " (post)" : ""),
-                                                   false));
+    {
+        const String name = String(fx.name) + (fx.stage == FxStage::pre ? " (pre)" : fx.stage == FxStage::post ? " (post)" : "");
+        l.add(std::make_unique<AudioParameterBool>(ParameterID { String(fx.id) + "On", 1 }, name, false));
+        for (int k = 0; k < fx.numKnobs(); ++k)
+            l.add(std::make_unique<AudioParameterFloat>(ParameterID { String(fx.id) + "K" + String(k), 1 },
+                                                        name + " " + String(fx.knobs[(size_t)k].name).toLowerCase(), NormalisableRange<float>(0.0f, 1.0f, 0.001f),
+                                                        fx.knobs[(size_t)k].def,
+                                                        AudioParameterFloatAttributes().withStringFromValueFunction([](float v, int) { return String(v * 10.0f, 1); })));
+    }
     l.add(std::make_unique<AudioParameterBool>(ParameterID { "metroOn", 1 }, "Metronome", false));
     l.add(std::make_unique<AudioParameterFloat>(ParameterID { "bpm", 1 }, "Tempo", NormalisableRange<float>(30.0f, 300.0f, 1.0f), 120.0f,
                                                 AudioParameterFloatAttributes().withLabel("BPM")));
@@ -97,7 +104,11 @@ MJRAmpProcessor::MJRAmpProcessor()
     transpose = params.getRawParameterValue("transpose");
     metroOn = params.getRawParameterValue("metroOn");
     for (int i = 0; i < numFx; ++i)
+    {
         fxOn[(size_t)i] = params.getRawParameterValue(juce::String(fxChain[i].id) + "On");
+        for (int k = 0; k < fxChain[i].numKnobs(); ++k)
+            fxKnob[(size_t)i][(size_t)k] = params.getRawParameterValue(juce::String(fxChain[i].id) + "K" + juce::String(k));
+    }
     bpm = params.getRawParameterValue("bpm");
     beats = params.getRawParameterValue("beats");
     metroLevel = params.getRawParameterValue("metroLevel");
@@ -198,6 +209,13 @@ void MJRAmpProcessor::prepareToPlay(double sr, int maxBlock)
         c.prepare(spec);
     dry.setSize(1, maxBlock);
     slotBuf.setSize(1, maxBlock);
+    fxScratch.setSize(1, maxBlock);
+    for (int i = 0; i < numFx; ++i) // fresh instances: no stale delay/reverb tails across a restart
+        if (fxChain[i].create != nullptr)
+        {
+            fx[(size_t)i].reset(fxChain[i].create(nullptr));
+            fx[(size_t)i]->setSampleRate((float)sr);
+        }
 }
 
 bool MJRAmpProcessor::isBusesLayoutSupported(const BusesLayout& l) const
@@ -332,13 +350,20 @@ void MJRAmpProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
 void MJRAmpProcessor::runFx(FxStage stage, juce::AudioBuffer<float>& buffer, int numChannels)
 {
-    for (int i = 0; i < numFx; ++i)
-        if (fxChain[i].stage == stage && fxOn[(size_t)i]->load() > 0.5f)
-        {
-            // ponytail: placeholder, audio passes through unchanged. Each module gets its DSP
-            // (and its own parameters) when the real effect is chosen.
-            juce::ignoreUnused(buffer, numChannels);
-        }
+    const int n = buffer.getNumSamples();
+    for (size_t i = 0; i < (size_t)numFx; ++i)
+    {
+        auto* effect = fx[i].get();
+        if (fxChain[i].stage != stage || effect == nullptr || fxOn[i]->load() < 0.5f)
+            continue; // ponytail: the Octaver has no DSP yet (pitch shifter, e.g. signalsmith-stretch)
+        for (int k = 0; k < fxChain[i].numKnobs(); ++k)
+            effect->setParameter(k, fxKnob[i][(size_t)k]->load());
+        // Airwindows is stereo; a mono stage feeds it the same signal twice and keeps the left side.
+        if (numChannels < 2)
+            fxScratch.copyFrom(0, 0, buffer, 0, 0, n);
+        float* ch[2] = { buffer.getWritePointer(0), numChannels < 2 ? fxScratch.getWritePointer(0) : buffer.getWritePointer(1) };
+        effect->processReplacing(ch, ch, n);
+    }
 }
 
 int MJRAmpProcessor::copyTunerInput(float* dest, int n) const

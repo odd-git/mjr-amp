@@ -252,26 +252,51 @@ int main(int argc, char** argv)
         CHECK(loudGated > onCh2 * 0.5f, "gate cuts the playing");
     }
 
-    // 9. Effect placeholders: switched on, the chain is still bit-identical.
+    // 9. Effects: each one, switched on alone, changes the sound but keeps it finite and sane;
+    //    the Octaver (placeholder) leaves it bit-identical.
     {
-        juce::AudioBuffer<float> outs[2];
-        for (int on = 0; on < 2; ++on)
+        auto render = [&](const char* fxId)
         {
             MJRAmpProcessor p;
             p.setLibraryDir(lib);
-            for (auto& fx : fxChain)
-                setParam(p, (juce::String(fx.id) + "On").toRawUTF8(), (float)on);
+            if (fxId != nullptr)
+            {
+                setParam(p, (juce::String(fxId) + "On").toRawUTF8(), 1.0f);
+                if (juce::String(fxId) == "eq")
+                    setParam(p, "eqK0", 0.8f); // flat PearEQ is neutral: boost the highs
+            }
             p.prepareToPlay(48000, block);
             waitIdle(p, block);
-            outs[on].setSize(2, 24000);
-            outs[on].clear();
-            outs[on].copyFrom(0, 0, di, 0, di.getNumSamples() / 2, 24000);
-            run(p, outs[on], block);
+            juce::AudioBuffer<float> b(2, 48000);
+            b.clear();
+            b.copyFrom(0, 0, di, 0, di.getNumSamples() / 2, 48000);
+            run(p, b, block);
+            return b;
+        };
+        const auto off = render(nullptr);
+        const float offRms = off.getRMSLevel(1, 0, 48000);
+        for (auto& fx : fxChain)
+        {
+            const auto on = render(fx.id);
+            float diff = 0;
+            bool finite = true;
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < 48000; ++i)
+                {
+                    finite = finite && std::isfinite(on.getSample(ch, i));
+                    diff = std::max(diff, std::abs(on.getSample(ch, i) - off.getSample(ch, i)));
+                }
+            const float rms = on.getRMSLevel(1, 0, 48000);
+            std::cout << "fx " << fx.id << ": max diff " << diff << ", rms " << rms << " (off " << offRms << ")\n";
+            CHECK(finite, fx.id << " produced NaN/inf");
+            if (fx.create == nullptr)
+                CHECK(diff < 1e-6f, fx.id << " placeholder changed the audio");
+            else
+            {
+                CHECK(diff > 1e-4f, fx.id << " does nothing");
+                CHECK(rms > offRms * 0.1f && rms < offRms * 10.0f, fx.id << " level out of range: " << rms);
+            }
         }
-        float diff = 0;
-        for (int i = 0; i < 24000; ++i)
-            diff = std::max(diff, std::abs(outs[0].getSample(1, i) - outs[1].getSample(1, i)));
-        CHECK(diff < 1e-6f, "placeholder effects changed the audio: " << diff);
     }
 
     // 5. Optional: editor snapshots, mjr-test <lib> <DI> <out dir>

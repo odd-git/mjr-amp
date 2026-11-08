@@ -42,6 +42,17 @@ set_target_properties(MJRData PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 target_sources(MJRAmp PRIVATE src/Processor.cpp src/Editor.cpp)
 
+# Airwindows effects (MIT): the LinuxVST sources compile unchanged against libs/airwindows/audioeffectx.h.
+# Every plugin defines createEffectInstance(); rename it per plugin so they can live in one binary.
+foreach(fx Dynamics3 Density3 TapeDelay2 PearEQ StereoChorus Galactic3 Doublelay)
+    set(fx_sources libs/airwindows/${fx}/${fx}.cpp libs/airwindows/${fx}/${fx}Proc.cpp)
+    target_sources(MJRAmp PRIVATE ${fx_sources})
+    set_source_files_properties(${fx_sources} PROPERTIES
+        COMPILE_DEFINITIONS createEffectInstance=mjr_create_${fx}
+        COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>")
+endforeach()
+target_include_directories(MJRAmp SYSTEM PRIVATE libs/airwindows)
+
 target_compile_definitions(MJRAmp PUBLIC
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 $<$<PLATFORM_ID:Linux>:JUCE_JACK=1> JUCE_VST3_CAN_REPLACE_VST2=0
     JUCE_DISPLAY_SPLASH_SCREEN=0 MJR_HAS_PHOTO=${MJR_HAS_PHOTO})

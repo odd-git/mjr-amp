@@ -270,9 +270,18 @@ struct ChannelSwitch : juce::ToggleButton
 struct Pedal : juce::ToggleButton
 {
     Pedal(juce::AudioProcessorValueTreeState& params, const FxInfo& fx, juce::Colour c)
-        : juce::ToggleButton(fx.name), colour(c), attachment(params, juce::String(fx.id) + "On", *this)
+        : juce::ToggleButton(fx.name), colour(c), placeholder(fx.create == nullptr), attachment(params, juce::String(fx.id) + "On", *this)
     {
-        setTooltip(juce::String(fx.name) + " (placeholder: audio passes through)");
+        setTooltip(placeholder ? juce::String(fx.name) + " (placeholder: audio passes through)" : juce::String(fx.name));
+        for (int k = 0; k < fx.numKnobs(); ++k)
+            addAndMakeVisible(knobs.add(new LabeledKnob(params, juce::String(fx.id) + "K" + juce::String(k), fx.knobs[(size_t)k].name)));
+    }
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced(10).withTrimmedTop(80).withTrimmedBottom(96);
+        const int cols = knobs.size() > 2 ? 2 : knobs.size(), cw = cols > 0 ? r.getWidth() / cols : 0;
+        for (int k = 0; k < knobs.size(); ++k)
+            knobs[k]->setBounds(r.getX() + (k % cols) * cw, r.getY() + (k / cols) * 84, cw, 84);
     }
     void paintButton(juce::Graphics& g, bool over, bool) override
     {
@@ -298,9 +307,12 @@ struct Pedal : juce::ToggleButton
         g.setColour(juce::Colours::white);
         g.setFont(juce::FontOptions(18.0f, juce::Font::bold));
         g.drawText(getName().toUpperCase(), r.withTrimmedTop(44).removeFromTop(30), juce::Justification::centred);
-        g.setColour(juce::Colours::white.withAlpha(0.55f));
-        g.setFont(juce::FontOptions(11.0f));
-        g.drawText("placeholder", r.withTrimmedTop(74).removeFromTop(16), juce::Justification::centred);
+        if (placeholder)
+        {
+            g.setColour(juce::Colours::white.withAlpha(0.55f));
+            g.setFont(juce::FontOptions(11.0f));
+            g.drawText("placeholder", r.withTrimmedTop(74).removeFromTop(16), juce::Justification::centred);
+        }
         const auto sw = juce::Rectangle<float>(46, 46).withCentre({ r.getCentreX(), r.getBottom() - 44 });
         g.setGradientFill(juce::ColourGradient(juce::Colour(0xffe8e8e8), sw.getX(), sw.getY(), juce::Colour(0xff6a6a6a), sw.getRight(), sw.getBottom(), false));
         g.fillEllipse(sw);
@@ -311,6 +323,8 @@ struct Pedal : juce::ToggleButton
         g.drawText(on ? "ON" : "OFF", r.removeFromBottom(14), juce::Justification::centred);
     }
     juce::Colour colour;
+    bool placeholder;
+    juce::OwnedArray<LabeledKnob> knobs;
     juce::AudioProcessorValueTreeState::ButtonAttachment attachment;
 };
 
@@ -347,7 +361,7 @@ public:
         const int w = 170, gap = 40, total = pedals.size() * w + (pedals.size() - 1) * gap;
         int x = (getWidth() - total) / 2;
         for (auto* p : pedals)
-            p->setBounds(x, getHeight() / 2 - 140, w, 270), x += w + gap;
+            p->setBounds(x, getHeight() / 2 - 230, w, 440), x += w + gap;
     }
 
 private:
