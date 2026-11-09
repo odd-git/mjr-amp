@@ -1,6 +1,7 @@
 // Headless checks. Usage: mjr-test <capture library dir> <DI wav>
 #include "../src/Processor.h"
 #include "../src/Pitch.h"
+#include "../src/CircuitAmp.h"
 #include <iostream>
 
 static int failures = 0;
@@ -65,6 +66,36 @@ int main(int argc, char** argv)
         return std::cerr << "cannot read DI\n", 2;
     juce::AudioBuffer<float> di(1, (int)reader->lengthInSamples);
     reader->read(&di, 0, di.getNumSamples(), 0, true, false);
+
+    // C1. Circuit model, linear part: the tone stack's per-sample solve matches the exact network response.
+    {
+        const double fs = 192000;
+        auto gainAt = [&](float t, float b, float m, double hz)
+        {
+            circuit::ToneStack ts;
+            ts.setRate(fs);
+            ts.setKnobs(t, b, m);
+            double acc = 0;
+            const int settle = (int)fs / 5, len = (int)fs / 5;
+            for (int i = 0; i < settle + len; ++i)
+            {
+                const float y = ts.process((float)std::sin(2 * juce::MathConstants<double>::pi * hz * i / fs));
+                if (i >= settle)
+                    acc += (double)y * y;
+            }
+            return std::make_pair(std::sqrt(2 * acc / len), ts.magnitudeAt(hz));
+        };
+        for (double hz : { 50.0, 200.0, 700.0, 2000.0, 6000.0 })
+        {
+            const auto [sim, exact] = gainAt(0.5f, 0.5f, 0.5f, hz);
+            std::cout << "tone stack " << hz << " Hz: " << juce::Decibels::gainToDecibels(sim) << " dB (exact "
+                      << juce::Decibels::gainToDecibels(exact) << ")\n";
+            CHECK(std::abs(juce::Decibels::gainToDecibels(sim / exact)) < 0.3, "tone stack sim vs exact at " << hz);
+        }
+        CHECK(gainAt(1, .5f, .5f, 4000).second > 1.4 * gainAt(0, .5f, .5f, 4000).second, "treble raises highs");
+        CHECK(gainAt(.5f, 1, .5f, 100).second > 1.4 * gainAt(.5f, 0, .5f, 100).second, "bass raises lows");
+        CHECK(gainAt(.5f, .5f, 1, 700).second > 1.4 * gainAt(.5f, .5f, 0, 700).second, "middle raises mids");
+    }
 
     // 0. Benchmark (informative, machine dependent): seconds of audio per second of CPU, block 128.
     {
