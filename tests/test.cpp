@@ -298,7 +298,7 @@ int main(int argc, char** argv)
             {
                 setParam(p, (juce::String(fxId) + "On").toRawUTF8(), 1.0f);
                 if (juce::String(fxId) == "eq")
-                    setParam(p, "eqK0", 0.8f); // flat PearEQ is neutral: boost the highs
+                    setParam(p, "eqK7", 9.0f); // a flat EQ is neutral: boost 8 kHz
             }
             p.prepareToPlay(48000, block);
             waitIdle(p, block);
@@ -368,6 +368,64 @@ int main(int argc, char** argv)
         }
     }
 
+    // 11. Delay time in ms: an impulse through the post delay alone (amp off, no IR, full wet, one repeat)
+    //     comes back after the time on the knob.
+    for (double sr : { 44100.0, 48000.0, 96000.0 })
+        for (float ms : { 100.0f, 300.0f, 500.0f, 1500.0f })
+        {
+            MJRAmpProcessor p;
+            setParam(p, "ampOn", 0.0f);
+            for (int s = 1; s <= MJRAmpProcessor::numIrSlots; ++s)
+                setParam(p, ("ir" + juce::String(s) + "On").toRawUTF8(), 0.0f);
+            setParam(p, "postDelayOn", 1.0f);
+            setParam(p, "postDelayK0", ms);
+            setParam(p, "postDelayK1", 0.0f); // no feedback
+            setParam(p, "postDelayK4", 0.0f); // no flutter
+            setParam(p, "postDelayK5", 1.0f); // wet only
+            p.prepareToPlay(sr, block);
+            juce::AudioBuffer<float> b(2, (int)(sr * 2));
+            b.clear();
+            for (int i = 0; i < 8; ++i) // 8 samples: at 96k TapeDelay2 only reads every other one
+                b.setSample(0, i, 1.0f);
+            run(p, b, block);
+            int peak = 0;
+            for (int i = 1; i < b.getNumSamples(); ++i)
+                if (std::abs(b.getSample(0, i)) > std::abs(b.getSample(0, peak)))
+                    peak = i;
+            const double got = peak * 1000.0 / sr;
+            CHECK(std::abs(got / ms - 1.0) < 0.03, "delay " << ms << " ms at " << sr << " Hz came after " << got << " ms");
+            if (sr == 48000.0)
+                std::cout << "delay " << ms << " ms: echo after " << got << " ms\n";
+        }
+
+    // 12. Our dB knobs, on a linear chain (amp off, no IR): compressor LEVEL +6 dB doubles the output;
+    //     graphic EQ 1 kHz band at +12 dB lifts a 1 kHz tone about 4x.
+    {
+        auto rms = [&](std::initializer_list<std::pair<const char*, float>> settings, bool tone)
+        {
+            MJRAmpProcessor p;
+            setParam(p, "ampOn", 0.0f);
+            for (int s = 1; s <= MJRAmpProcessor::numIrSlots; ++s)
+                setParam(p, ("ir" + juce::String(s) + "On").toRawUTF8(), 0.0f);
+            for (auto& [id, v] : settings)
+                setParam(p, id, v);
+            p.prepareToPlay(48000, block);
+            juce::AudioBuffer<float> b(2, 48000);
+            b.clear();
+            for (int i = 0; i < 48000; ++i)
+                b.setSample(0, i, tone ? 0.1f * std::sin(juce::MathConstants<float>::twoPi * 1000.0f * (float)i / 48000.0f)
+                                       : di.getSample(0, (di.getNumSamples() / 2 + i) % di.getNumSamples()));
+            run(p, b, block);
+            return b.getRMSLevel(0, 24000, 24000);
+        };
+        const float comp0 = rms({ { "compOn", 1.0f } }, false), comp6 = rms({ { "compOn", 1.0f }, { "compK4", 6.0f } }, false);
+        std::cout << "comp level +6 dB: x" << comp6 / comp0 << "\n";
+        CHECK(std::abs(comp6 / comp0 - 2.0f) < 0.02f, "comp makeup +6 dB gave x" << comp6 / comp0);
+        const float flat = rms({ { "eqOn", 1.0f } }, true), boosted = rms({ { "eqOn", 1.0f }, { "eqK4", 12.0f } }, true);
+        std::cout << "eq 1 kHz +12 dB: x" << boosted / flat << "\n";
+        CHECK(std::abs(boosted / flat - 3.98f) < 0.2f, "eq 1 kHz +12 dB gave x" << boosted / flat);
+    }
+
     // 5. Optional: editor snapshots, mjr-test <lib> <DI> <out dir>
     if (argc > 3)
     {
@@ -413,6 +471,8 @@ int main(int argc, char** argv)
         click("PRE FX");
         click("Drive"); // a pedal switched on
         save("pre.png");
+        click("EQ");
+        save("eq.png");
         click("POST FX");
         save("post.png");
         click("AMP");

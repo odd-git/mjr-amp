@@ -16,42 +16,52 @@ struct Capture
 // Effect modules, in signal-chain order (same chain as Archetype: Plini X).
 // DSP comes from Airwindows (MIT, libs/airwindows); knob values are the plugin's own 0..1 parameters.
 class AudioEffect; // Airwindows base class, libs/airwindows/audioeffectx.h
-#define MJR_AIRWINDOWS(X) X(Dynamics3) X(TapeDelay2) X(PearEQ) X(StereoChorus) X(Galactic3) X(Doublelay)
+#define MJR_AIRWINDOWS(X) X(Dynamics3) X(TapeDelay2) X(StereoChorus) X(Galactic3) X(Doublelay)
 #define MJR_DECLARE(name) AudioEffect* mjr_create_##name(void*);
 MJR_AIRWINDOWS(MJR_DECLARE)
 #undef MJR_DECLARE
 
 enum class FxStage { pre, eq, post };
+// Knob units: plain 0..1 (Airwindows' own scale, shown 0..10); ms = a delay time (see tapeDelayTime);
+// dB = our own gain after the effect (an Airwindows effect never sees it), or a band of our graphic EQ.
+enum class FxUnit { plain, ms, db };
 struct FxKnob
 {
     const char* name;
     float def;
+    FxUnit unit = FxUnit::plain;
+    float lo = 0, hi = 1;
 };
+inline constexpr int maxFxKnobs = 9;
 struct FxInfo
 {
     const char* id;
     const char* name;
     FxStage stage;
-    AudioEffect* (*create)(void*); // nullptr: placeholder, audio passes through
-    std::array<FxKnob, 6> knobs;   // unused entries have a null name
-    bool placeholder() const { return create == nullptr && std::string_view(id) != "drive"; }
+    AudioEffect* (*create)(void*); // nullptr: our own DSP (drive, eq) or a placeholder (audio passes through)
+    std::array<FxKnob, maxFxKnobs> knobs; // unused entries have a null name
+    bool placeholder() const { return create == nullptr && std::string_view(id) != "drive" && std::string_view(id) != "eq"; }
     int numKnobs() const
     {
         int n = 0;
-        while (n < 6 && knobs[(size_t)n].name != nullptr)
+        while (n < maxFxKnobs && knobs[(size_t)n].name != nullptr)
             ++n;
         return n;
     }
 };
-inline constexpr FxKnob delayKnobs[6] = { { "TIME", 0.5f }, { "REPEATS", 0.4f }, { "TONE", 0.5f }, { "RESO", 0.0f }, { "FLUTTER", 0.1f }, { "MIX", 0.25f } };
+// Graphic EQ bands (Hz), one octave apart; the knob names below match.
+inline constexpr float eqFreqs[9] = { 65, 125, 250, 500, 1000, 2000, 4000, 8000, 16000 };
+inline constexpr FxKnob eqBand(const char* name) { return { name, 0.0f, FxUnit::db, -12.0f, 12.0f }; }
+inline constexpr FxKnob delayKnobs[6] = { { "TIME", 500.0f, FxUnit::ms, 80.0f, 1800.0f }, { "REPEATS", 0.4f }, { "TONE", 0.5f }, { "RESO", 0.0f }, { "FLUTTER", 0.1f }, { "MIX", 0.25f } };
 inline constexpr FxInfo fxChain[] = {
-    { "comp", "Compressor", FxStage::pre, mjr_create_Dynamics3, { { { "THRESHOLD", 0.6f }, { "ATTACK", 0.382f }, { "RELEASE", 0.618f }, { "MIX", 1.0f } } } },
+    { "comp", "Compressor", FxStage::pre, mjr_create_Dynamics3, { { { "THRESHOLD", 0.6f }, { "ATTACK", 0.382f }, { "RELEASE", 0.618f }, { "MIX", 1.0f }, { "LEVEL", 0.0f, FxUnit::db, -12.0f, 18.0f } } } },
     { "octaver", "Octaver", FxStage::pre, nullptr, {} },
     // Drive: NAM captures of a real pedal (MJRAmpProcessor::drivePedal), knobs 0..10 like the pedal's.
     { "drive", "Drive", FxStage::pre, nullptr, { { { "DRIVE", 0.7f }, { "TONE", 0.7f }, { "LEVEL", 0.7f } } } },
     { "preDelay", "Delay", FxStage::pre, mjr_create_TapeDelay2, { delayKnobs[0], delayKnobs[1], delayKnobs[2], delayKnobs[3], delayKnobs[4], delayKnobs[5] } },
-    { "eq", "EQ", FxStage::eq, mjr_create_PearEQ,
-      { { { "HIGH", 0.5f }, { "HI MID", 0.5f }, { "MID", 0.5f }, { "LO MID", 0.5f }, { "BASS", 0.5f }, { "SUB", 0.5f } } } },
+    // EQ: our own 9-band graphic EQ (MJRAmpProcessor::graphicEq).
+    { "eq", "Graphic EQ", FxStage::eq, nullptr,
+      { eqBand("65 Hz"), eqBand("125 Hz"), eqBand("250 Hz"), eqBand("500 Hz"), eqBand("1 kHz"), eqBand("2 kHz"), eqBand("4 kHz"), eqBand("8 kHz"), eqBand("16 kHz") } },
     { "chorus", "Chorus", FxStage::post, mjr_create_StereoChorus, { { { "SPEED", 0.3f }, { "DEPTH", 0.4f } } } },
     { "postDelay", "Delay", FxStage::post, mjr_create_TapeDelay2, { delayKnobs[0], delayKnobs[1], delayKnobs[2], delayKnobs[3], delayKnobs[4], delayKnobs[5] } },
     { "reverb", "Reverb", FxStage::post, mjr_create_Galactic3,
@@ -121,6 +131,7 @@ private:
     void timerCallback() override { poll(); }
     void loadCapture(int index, bool resetKnobs);
     void updateFilters();
+    void updateGraphicEq();
 
     NamEngine engine;
     juce::File libraryDir;
@@ -144,9 +155,12 @@ private:
     void addMetronome(juce::AudioBuffer<float>&, int numOut);
     void runFx(FxStage, juce::AudioBuffer<float>&, int numChannels);
     std::array<std::atomic<float>*, numFx> fxOn {};
-    std::array<std::array<std::atomic<float>*, 6>, numFx> fxKnob {};
+    std::array<std::array<std::atomic<float>*, maxFxKnobs>, numFx> fxKnob {};
     std::array<std::unique_ptr<AudioEffect>, numFx> fx; // see Processor.cpp: deleted where AudioEffect is complete
     juce::AudioBuffer<float> fxScratch;                 // right channel for the mono pre/eq stages
+    std::array<float, numFx> fxGain {};                 // last applied dB knob gain, ramped per block
+    std::array<juce::dsp::IIR::Filter<float>, 9> graphicEq;
+    std::array<float, 9> graphicEqDb {};
     double metroSamples = 0; // free-running position, in samples since the last beat
     int metroBeat = -1;
     int clickPos = 1 << 30;

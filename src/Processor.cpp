@@ -12,8 +12,18 @@ juce::File rememberedDriveFile()
 {
     return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory).getChildFile("MJR Amp/drive.txt");
 }
-constexpr int driveFx = 2; // fxChain index of the NAM drive pedal
-static_assert(std::string_view(fxChain[driveFx].id) == "drive");
+constexpr int driveFx = 2, eqFx = 4; // fxChain indices of our own DSP: NAM drive pedal, graphic EQ
+
+// TapeDelay2's Time knob sets a tape speed, not a time: the head moves `speed` slots per internal sample
+// round an 88200-slot loop, the internal rate being sr / cycleEnd (about 44.1k). So the echo comes after
+// 88200 / speed internal samples, with speed = 1 + 25 * A^4. Inverted here: milliseconds -> A.
+float tapeDelayTime(float ms, double sr)
+{
+    const double cycleEnd = juce::jlimit(1.0, 4.0, std::floor(sr / 44100.0));
+    const double speed = 88200.0 * cycleEnd / (sr * ms * 0.001);
+    return (float)std::pow(juce::jlimit(0.0, 1.0, (speed - 1.0) / 25.0), 0.25);
+}
+static_assert(std::string_view(fxChain[driveFx].id) == "drive" && std::string_view(fxChain[eqFx].id) == "eq");
 
 std::vector<Capture> parseCaptures()
 {
@@ -82,10 +92,26 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout(const std::vector
         const String name = String(fx.name) + (fx.stage == FxStage::pre ? " (pre)" : fx.stage == FxStage::post ? " (post)" : "");
         l.add(std::make_unique<AudioParameterBool>(ParameterID { String(fx.id) + "On", 1 }, name, false));
         for (int k = 0; k < fx.numKnobs(); ++k)
-            l.add(std::make_unique<AudioParameterFloat>(ParameterID { String(fx.id) + "K" + String(k), 1 },
-                                                        name + " " + String(fx.knobs[(size_t)k].name).toLowerCase(), NormalisableRange<float>(0.0f, 1.0f, 0.001f),
-                                                        fx.knobs[(size_t)k].def,
-                                                        AudioParameterFloatAttributes().withStringFromValueFunction([](float v, int) { return String(v * 10.0f, 1); })));
+        {
+            const auto& knob = fx.knobs[(size_t)k];
+            const ParameterID id { String(fx.id) + "K" + String(k), 1 };
+            const String knobName = name + " " + String(knob.name).toLowerCase();
+            if (knob.unit == FxUnit::ms)
+            {
+                NormalisableRange<float> range(knob.lo, knob.hi, 1.0f);
+                range.setSkewForCentre(500.0f); // finer steps for short, rhythmic times
+                l.add(std::make_unique<AudioParameterFloat>(id, knobName, range, knob.def,
+                                                            AudioParameterFloatAttributes().withLabel("ms").withStringFromValueFunction(
+                                                                [](float v, int) { return String(roundToInt(v)); })));
+            }
+            else if (knob.unit == FxUnit::db)
+                l.add(std::make_unique<AudioParameterFloat>(id, knobName, NormalisableRange<float>(knob.lo, knob.hi, 0.1f), knob.def,
+                                                            AudioParameterFloatAttributes().withLabel("dB").withStringFromValueFunction(
+                                                                [](float v, int) { return String(v, 1); })));
+            else
+                l.add(std::make_unique<AudioParameterFloat>(id, knobName, NormalisableRange<float>(0.0f, 1.0f, 0.001f), knob.def,
+                                                            AudioParameterFloatAttributes().withStringFromValueFunction([](float v, int) { return String(v * 10.0f, 1); })));
+        }
     }
     l.add(std::make_unique<AudioParameterBool>(ParameterID { "metroOn", 1 }, "Metronome", false));
     l.add(std::make_unique<AudioParameterFloat>(ParameterID { "bpm", 1 }, "Tempo", NormalisableRange<float>(30.0f, 300.0f, 1.0f), 120.0f,
@@ -233,6 +259,11 @@ void MJRAmpProcessor::prepareToPlay(double sr, int maxBlock)
     dry.setSize(1, maxBlock);
     slotBuf.setSize(1, maxBlock);
     fxScratch.setSize(1, maxBlock);
+    fxGain.fill(1.0f);
+    for (auto& f : graphicEq)
+        f.prepare(spec), f.reset();
+    graphicEqDb.fill(1e9f);
+    updateGraphicEq(); // first assignment sizes the coefficient arrays, later ones don't allocate
     for (int i = 0; i < numFx; ++i) // fresh instances: no stale delay/reverb tails across a restart
         if (fxChain[i].create != nullptr)
         {
@@ -397,6 +428,17 @@ void MJRAmpProcessor::runFx(FxStage stage, juce::AudioBuffer<float>& buffer, int
     {
         if (fxChain[i].stage != stage || fxOn[i]->load() < 0.5f)
             continue;
+        if (i == (size_t)eqFx)
+        {
+            updateGraphicEq();
+            float* mono = buffer.getWritePointer(0); // the eq stage is mono, between amp and cab
+            juce::dsp::AudioBlock<float> block(&mono, 1, (size_t)n);
+            juce::dsp::ProcessContextReplacing<float> ctx(block);
+            for (size_t b = 0; b < graphicEq.size(); ++b)
+                if (std::abs(graphicEqDb[b]) > 0.01f) // flat bands cost nothing
+                    graphicEq[b].process(ctx);
+            continue;
+        }
         if (i == (size_t)driveFx)
         {
             auto k = [&](size_t j) { return fxKnob[i][j]->load() * 10.0f; };
@@ -406,13 +448,44 @@ void MJRAmpProcessor::runFx(FxStage stage, juce::AudioBuffer<float>& buffer, int
         auto* effect = fx[i].get();
         if (effect == nullptr)
             continue; // ponytail: the Octaver has no DSP yet (pitch shifter, e.g. signalsmith-stretch)
+        float gainDb = 0; // our dB knobs (e.g. the compressor's makeup) act after the effect
         for (int k = 0; k < fxChain[i].numKnobs(); ++k)
-            effect->setParameter(k, fxKnob[i][(size_t)k]->load());
+        {
+            const float v = fxKnob[i][(size_t)k]->load();
+            switch (fxChain[i].knobs[(size_t)k].unit)
+            {
+                case FxUnit::db: gainDb += v; break;
+                case FxUnit::ms: effect->setParameter(k, tapeDelayTime(v, sampleRate)); break;
+                case FxUnit::plain: effect->setParameter(k, v); break;
+            }
+        }
         // Airwindows is stereo; a mono stage feeds it the same signal twice and keeps the left side.
         if (numChannels < 2)
             fxScratch.copyFrom(0, 0, buffer, 0, 0, n);
         float* ch[2] = { buffer.getWritePointer(0), numChannels < 2 ? fxScratch.getWritePointer(0) : buffer.getWritePointer(1) };
         effect->processReplacing(ch, ch, n);
+        if (const float g = juce::Decibels::decibelsToGain(gainDb); g != 1.0f || fxGain[i] != 1.0f)
+        {
+            for (int c = 0; c < numChannels; ++c)
+                buffer.applyGainRamp(c, 0, n, fxGain[i], g);
+            fxGain[i] = g;
+        }
+    }
+}
+
+void MJRAmpProcessor::updateGraphicEq()
+{
+    for (size_t b = 0; b < graphicEq.size(); ++b)
+    {
+        const float db = fxKnob[eqFx][b]->load();
+        if (std::abs(db - graphicEqDb[b]) < 0.01f)
+            continue;
+        graphicEqDb[b] = db;
+        if (std::abs(db) <= 0.01f)
+            graphicEq[b].reset(); // bypassed from now on: no stale state when it comes back
+        // Q 1.4: about an octave wide, like the bands of a hardware graphic EQ.
+        *graphicEq[b].coefficients = juce::dsp::IIR::ArrayCoefficients<float>::makePeakFilter(
+            sampleRate, std::min((double)eqFreqs[b], sampleRate * 0.45), 1.4, juce::Decibels::decibelsToGain(db));
     }
 }
 

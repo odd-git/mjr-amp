@@ -41,6 +41,33 @@ struct Look : juce::LookAndFeel_V4
         setColour(juce::TooltipWindow::textColourId, col::text);
     }
 
+    // Graphic EQ faders ("fader" property): dark slot, lit cap that glows while the EQ is on ("lit").
+    int getSliderThumbRadius(juce::Slider& s) override { return s.getProperties().contains("fader") ? 13 : LookAndFeel_V4::getSliderThumbRadius(s); }
+    void drawLinearSlider(juce::Graphics& g, int x, int y, int w, int h, float pos, float minPos, float maxPos,
+                          juce::Slider::SliderStyle style, juce::Slider& s) override
+    {
+        if (!s.getProperties().contains("fader"))
+            return LookAndFeel_V4::drawLinearSlider(g, x, y, w, h, pos, minPos, maxPos, style, s);
+        const auto r = juce::Rectangle<float>((float)x, (float)y, (float)w, (float)h);
+        const float cx = r.getCentreX();
+        const auto slot = juce::Rectangle<float>(9, r.getHeight() + 20).withCentre({ cx, r.getCentreY() });
+        g.setColour(juce::Colour(0xff0b0c0e));
+        g.fillRoundedRectangle(slot, 4.5f);
+        g.setColour(juce::Colours::white.withAlpha(0.07f));
+        g.drawRoundedRectangle(slot, 4.5f, 1);
+        const bool lit = s.getProperties()["lit"];
+        const auto cap = juce::Rectangle<float>(15, 24).withCentre({ cx, pos });
+        if (lit)
+        {
+            g.setGradientFill(juce::ColourGradient(juce::Colour(0x996fb6ff), cx, pos, juce::Colour(0x006fb6ff), cx + 22, pos, true));
+            g.fillEllipse(cap.expanded(14, 10));
+        }
+        g.setColour(lit ? juce::Colour(0xffeef6ff) : juce::Colour(0xff6c7178));
+        g.fillRoundedRectangle(cap, 3);
+        g.setColour(lit ? juce::Colour(0xff9fcfff) : juce::Colour(0xff3c4046));
+        g.drawRoundedRectangle(cap, 3, 1.2f);
+    }
+
     // Amp knobs ("amp" property): chrome cap on a knurled brass ring, like the panel's.
     // Other rotaries: a thin arc.
     void drawRotarySlider(juce::Graphics& g, int x, int y, int w, int h, float pos, float start, float end, juce::Slider& s) override
@@ -418,6 +445,112 @@ struct Pedal : juce::ToggleButton
     juce::AudioProcessorValueTreeState::ButtonAttachment attachment;
 };
 
+// Bat toggle with its LED, for the graphic EQ's on/off.
+struct EqSwitch : juce::ToggleButton
+{
+    void paintButton(juce::Graphics& g, bool over, bool) override
+    {
+        auto r = getLocalBounds().toFloat();
+        const bool on = getToggleState();
+        auto sw = r.removeFromLeft(r.getWidth() * 0.5f);
+        g.setColour(juce::Colour(0xffb8bcc2).withAlpha(over ? 1.0f : 0.8f));
+        g.setFont(juce::FontOptions(10.5f));
+        g.drawText("on", sw.removeFromTop(16), juce::Justification::centred);
+        g.drawText("off", sw.removeFromBottom(16), juce::Justification::centred);
+        const auto c = sw.getCentre();
+        const auto nut = juce::Rectangle<float>(22, 22).withCentre(c);
+        g.setGradientFill(juce::ColourGradient(juce::Colour(0xffd9dbde), nut.getX(), nut.getY(), juce::Colour(0xff4a4d52), nut.getRight(), nut.getBottom(), false));
+        g.fillEllipse(nut);
+        const auto tip = c.translated(0, on ? -14.0f : 14.0f);
+        g.setColour(juce::Colour(0xffc9ccd0));
+        g.drawLine(juce::Line<float>(c, tip), 5);
+        g.fillEllipse(juce::Rectangle<float>(8, 8).withCentre(tip));
+        const auto led = juce::Rectangle<float>(10, 10).withCentre(r.getCentre());
+        if (on)
+        {
+            g.setGradientFill(juce::ColourGradient(juce::Colour(0xccdff0ff), led.getCentreX(), led.getCentreY(), juce::Colour(0x00dff0ff), led.getCentreX(), led.getY() - 14, true));
+            g.fillEllipse(led.expanded(14));
+        }
+        g.setColour(on ? juce::Colour(0xfff4f9ff) : juce::Colour(0xff34383e));
+        g.fillEllipse(led);
+    }
+};
+
+// The graphic EQ as a rack unit: a lit fader per band, its gain above and frequency below. Double-click a fader for 0 dB.
+class GraphicEq : public juce::Component
+{
+public:
+    GraphicEq(MJRAmpProcessor& p, const FxInfo& fx) : onAtt(p.params, juce::String(fx.id) + "On", power)
+    {
+        for (int k = 0; k < fx.numKnobs(); ++k)
+        {
+            auto* f = faders.add(new juce::Slider(juce::Slider::LinearVertical, juce::Slider::NoTextBox));
+            f->getProperties().set("fader", true);
+            atts.add(new juce::AudioProcessorValueTreeState::SliderAttachment(p.params, juce::String(fx.id) + "K" + juce::String(k), *f));
+            f->setDoubleClickReturnValue(true, 0.0);
+            f->setTooltip(juce::String(fx.knobs[(size_t)k].name) + " (double-click: 0 dB)");
+            f->onValueChange = [this] { repaint(); };
+            names.add(fx.knobs[(size_t)k].name);
+            addAndMakeVisible(f);
+        }
+        power.setTooltip("Graphic EQ on/off");
+        power.onStateChange = [this] { light(); };
+        addAndMakeVisible(power);
+        light();
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        const auto body = getLocalBounds().toFloat().withTrimmedBottom(14);
+        g.setColour(juce::Colour(0xff0a0a0b)); // feet
+        for (float fx : { body.getX() + 60, body.getRight() - 140 })
+            g.fillRoundedRectangle(fx, body.getBottom() - 6, 80, 20, 5);
+        g.setColour(juce::Colours::black.withAlpha(0.5f));
+        g.fillRoundedRectangle(body.translated(0, 5), 14);
+        g.setGradientFill(juce::ColourGradient(juce::Colour(0xff3b3e43), 0, body.getY(), juce::Colour(0xff25272b), 0, body.getBottom(), false));
+        g.fillRoundedRectangle(body, 14);
+        g.setColour(juce::Colours::white.withAlpha(0.1f));
+        g.drawRoundedRectangle(body.reduced(0.5f), 14, 1);
+
+        g.setColour(juce::Colour(0xffaeb2b8));
+        g.setFont(juce::FontOptions(30.0f));
+        g.drawText("graphic eq", body.withWidth(faderLeft - 20).withTrimmedLeft(36), juce::Justification::centredLeft);
+        for (int k = 0; k < faders.size(); ++k)
+        {
+            const auto b = faders[k]->getBounds().toFloat();
+            g.setColour(juce::Colours::white.withAlpha(0.92f));
+            g.setFont(juce::FontOptions(11.5f, juce::Font::bold));
+            g.drawText(juce::String(faders[k]->getValue(), 1) + " dB", b.withY(b.getY() - 34).withHeight(16).expanded(12, 0), juce::Justification::centred);
+            g.setColour(juce::Colour(0xff9a9fa6));
+            g.setFont(juce::FontOptions(10.5f));
+            g.drawText(names[k], b.withY(b.getBottom() + 18).withHeight(16).expanded(12, 0), juce::Justification::centred);
+        }
+    }
+
+    void resized() override
+    {
+        const auto body = getLocalBounds().withTrimmedBottom(14);
+        const int right = body.getRight() - 140, w = (right - faderLeft) / juce::jmax(1, faders.size());
+        for (int k = 0; k < faders.size(); ++k)
+            faders[k]->setBounds(faderLeft + k * w + (w - 36) / 2, body.getY() + 64, 36, body.getHeight() - 128);
+        power.setBounds(right + 20, body.getCentreY() - 34, 92, 68);
+    }
+
+private:
+    void light()
+    {
+        for (auto* f : faders)
+            f->getProperties().set("lit", power.getToggleState()), f->repaint();
+    }
+
+    static constexpr int faderLeft = 240;
+    juce::OwnedArray<juce::Slider> faders;
+    juce::OwnedArray<juce::AudioProcessorValueTreeState::SliderAttachment> atts;
+    juce::StringArray names;
+    EqSwitch power;
+    juce::AudioProcessorValueTreeState::ButtonAttachment onAtt;
+};
+
 // A page of pedals for one stage of the chain, laid out left to right in signal order.
 class FxPage : public juce::Component
 {
@@ -430,14 +563,20 @@ public:
                                          juce::Colour(0xff2c2d30), juce::Colour(0xff5e6f88) };
         for (int i = 0; i < numFx; ++i)
             if (fxChain[i].stage == stage)
-                addAndMakeVisible(*pedals.add(new Pedal(p, fxChain[i], palette[i % 10])));
+            {
+                if (std::string_view(fxChain[i].id) == "eq")
+                    addAndMakeVisible(*(rack = std::make_unique<GraphicEq>(p, fxChain[i])));
+                else
+                    addAndMakeVisible(*pedals.add(new Pedal(p, fxChain[i], palette[i % 10])));
+            }
     }
 
     void paint(juce::Graphics& g) override
     {
-        if (pedals.isEmpty())
+        juce::Component* first = rack != nullptr ? (juce::Component*)rack.get() : pedals.isEmpty() ? nullptr : pedals[0];
+        if (first == nullptr)
             return;
-        const float y = (float)pedals[0]->getBounds().getCentreY();
+        const float y = (float)first->getBounds().getCentreY();
         g.setColour(col::line);
         g.drawLine(40, y, (float)getWidth() - 40, y, 3);
         g.setColour(col::dim);
@@ -452,10 +591,13 @@ public:
         int x = (getWidth() - total) / 2;
         for (auto* p : pedals)
             p->setBounds(x, getHeight() / 2 - 220, w, 440), x += w + gap;
+        if (rack != nullptr)
+            rack->setBounds(juce::Rectangle<int>(juce::jmin(1000, getWidth() - 260), 300).withCentre(getLocalBounds().getCentre()));
     }
 
 private:
     juce::OwnedArray<Pedal> pedals;
+    std::unique_ptr<GraphicEq> rack;
     juce::String source, destination;
 };
 
