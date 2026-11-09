@@ -29,13 +29,19 @@ juce_add_plugin(MJRAmp
     NEEDS_MIDI_INPUT FALSE
     COPY_PLUGIN_AFTER_BUILD FALSE)
 
-# The amp photo is not ours to publish: used only if present locally, otherwise a drawn panel.
+# The amp and cab photos are not ours to publish: used only if present locally, otherwise a drawn panel.
 set(MJR_DATA data/captures.json)
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/assets-local/amp.png)
     list(APPEND MJR_DATA assets-local/amp.png)
     set(MJR_HAS_PHOTO 1)
 else()
     set(MJR_HAS_PHOTO 0)
+endif()
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/assets-local/cab.png)
+    list(APPEND MJR_DATA assets-local/cab.png)
+    set(MJR_HAS_CAB 1)
+else()
+    set(MJR_HAS_CAB 0)
 endif()
 juce_add_binary_data(MJRData SOURCES ${MJR_DATA})
 set_target_properties(MJRData PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -55,7 +61,7 @@ target_include_directories(MJRAmp SYSTEM PRIVATE libs/airwindows)
 
 target_compile_definitions(MJRAmp PUBLIC
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 $<$<PLATFORM_ID:Linux>:JUCE_JACK=1> JUCE_VST3_CAN_REPLACE_VST2=0
-    JUCE_DISPLAY_SPLASH_SCREEN=0 MJR_HAS_PHOTO=${MJR_HAS_PHOTO})
+    JUCE_DISPLAY_SPLASH_SCREEN=0 MJR_HAS_PHOTO=${MJR_HAS_PHOTO} MJR_HAS_CAB=${MJR_HAS_CAB})
 
 target_link_libraries(MJRAmp
     PRIVATE MJRData juce::juce_audio_utils juce::juce_dsp

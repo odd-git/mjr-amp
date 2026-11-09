@@ -50,6 +50,37 @@ struct Look : juce::LookAndFeel_V4
         const float rad = std::min(r.getWidth(), r.getHeight()) * 0.5f;
         const float a = start + pos * (end - start);
 
+        if (s.getProperties().contains("pedal")) // stompbox knob: plain cap with a pointer line, min/max dots on the face
+        {
+            const bool dark = s.getProperties()["pedal"];
+            const float cap = rad * 0.82f;
+            g.setColour(s.findColour(juce::Slider::rotarySliderOutlineColourId));
+            for (float t : { start, end })
+                g.fillEllipse(juce::Rectangle<float>(rad * 0.13f, rad * 0.13f).withCentre(c.getPointOnCircumference(rad * 0.93f, t)));
+            g.setColour(juce::Colours::black.withAlpha(0.35f));
+            g.fillEllipse(juce::Rectangle<float>(cap * 2.1f, cap * 2.1f).withCentre(c.translated(0, cap * 0.2f)));
+            const auto skirt = juce::Rectangle<float>(cap * 2, cap * 2).withCentre(c);
+            g.setGradientFill(dark ? juce::ColourGradient(juce::Colour(0xff3a3a3c), c.x, skirt.getY(), juce::Colour(0xff060606), c.x, skirt.getBottom(), false)
+                                   : juce::ColourGradient(juce::Colour(0xffffffff), c.x, skirt.getY(), juce::Colour(0xffb9bcc0), c.x, skirt.getBottom(), false));
+            g.fillEllipse(skirt);
+            if (dark) // knurled edge
+            {
+                g.setColour(juce::Colour(0xff4a4a4c));
+                for (int i = 0; i < 28; ++i)
+                {
+                    const float t = (float)i * juce::MathConstants<float>::twoPi / 28.0f;
+                    g.drawLine(juce::Line<float>(c.getPointOnCircumference(cap * 0.86f, t), c.getPointOnCircumference(cap * 0.99f, t)), 0.8f);
+                }
+            }
+            const auto top = skirt.reduced(cap * 0.14f);
+            g.setGradientFill(dark ? juce::ColourGradient(juce::Colour(0xff121213), c.x, top.getY(), juce::Colour(0xff2c2c2e), c.x, top.getBottom(), false)
+                                   : juce::ColourGradient(juce::Colour(0xffe4e6e8), c.x, top.getY(), juce::Colour(0xfffbfbfb), c.x, top.getBottom(), false));
+            g.fillEllipse(top);
+            g.setColour(dark ? juce::Colours::white : juce::Colour(0xff26282c));
+            g.drawLine(juce::Line<float>(c.getPointOnCircumference(cap * 0.3f, a), c.getPointOnCircumference(cap * 0.8f, a)), juce::jmax(2.0f, rad * 0.09f));
+            return;
+        }
+
         if (!s.getProperties().contains("amp"))
         {
             juce::Path track, fill;
@@ -266,7 +297,7 @@ struct ChannelSwitch : juce::ToggleButton
     }
 };
 
-// Placeholder effect pedal: name, LED, footswitch. Click toggles the module on/off.
+// Effect pedal drawn as a stompbox: knobs, name, LED, footswitch. Click toggles the module on/off.
 struct Pedal : juce::ToggleButton
 {
     Pedal(MJRAmpProcessor& p, const FxInfo& fx, juce::Colour c)
@@ -293,7 +324,13 @@ struct Pedal : juce::ToggleButton
         for (int k = 0; k < fx.numKnobs(); ++k)
         {
             auto* knob = knobs.add(new LabeledKnob(params, juce::String(fx.id) + "K" + juce::String(k), fx.knobs[(size_t)k].name));
-            knob->value.setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.85f)); // grey vanishes on bright pedals
+            knob->knob.getProperties().set("pedal", !light()); // white caps on light pedals, black on dark ones
+            knob->knob.setColour(juce::Slider::rotarySliderOutlineColourId, ink().withAlpha(0.7f));
+            knob->label.setText(knob->label.getText().toLowerCase(), juce::dontSendNotification);
+            knob->label.setColour(juce::Label::textColourId, ink());
+            knob->label.setFont(juce::FontOptions(11.5f, juce::Font::bold));
+            knob->value.setColour(juce::Label::textColourId, ink().withAlpha(0.6f));
+            knob->value.setFont(juce::FontOptions(10.5f));
             addAndMakeVisible(knob);
         }
     }
@@ -304,52 +341,73 @@ struct Pedal : juce::ToggleButton
         const auto shot = proc.drivePedal.currentName();
         return shot.isEmpty() ? "Drive: no NAM captures found, pick their folder with ..." : "Drive, nearest capture: " + shot;
     }
+    bool light() const { return colour.getPerceivedBrightness() > 0.55f; }
+    juce::Colour ink() const { return light() ? juce::Colour(0xff2a2e35) : juce::Colours::white.withAlpha(0.92f); }
+    juce::Rectangle<float> face() const { return getLocalBounds().toFloat().reduced(10, 4).withTrimmedBottom(8).reduced(4); }
+
     void resized() override
     {
-        folder.setBounds(getWidth() - 40, 12, 28, 20);
-        auto r = getLocalBounds().reduced(10).withTrimmedTop(80).withTrimmedBottom(96);
-        const int cols = knobs.size() > 2 ? 2 : knobs.size(), cw = cols > 0 ? r.getWidth() / cols : 0;
-        for (int k = 0; k < knobs.size(); ++k)
-            knobs[k]->setBounds(r.getX() + (k % cols) * cw, r.getY() + (k / cols) * 84, cw, 84);
+        folder.setBounds(getWidth() - 46, 16, 28, 18);
+        auto r = face().toNearestInt().reduced(8).withTrimmedTop(22);
+        const int n = knobs.size(), cols = n > 4 ? 3 : juce::jmin(n, 2), rowH = n > 2 ? 104 : 124;
+        for (int k = 0; k < n; ++k)
+        {
+            const int row = k / cols, inRow = juce::jmin(cols, n - row * cols), cw = r.getWidth() / juce::jmax(cols, 1);
+            const int x = r.getX() + (r.getWidth() - inRow * cw) / 2 + (k % cols) * cw;
+            knobs[k]->setBounds(x, r.getY() + row * rowH, cw, rowH);
+        }
     }
     void paintButton(juce::Graphics& g, bool over, bool) override
     {
-        auto r = getLocalBounds().toFloat().reduced(4);
-        g.setColour(juce::Colours::black.withAlpha(0.5f));
-        g.fillRoundedRectangle(r.translated(3, 5), 12);
-        g.setGradientFill(juce::ColourGradient(colour.brighter(0.15f), r.getX(), r.getY(), colour.darker(0.5f), r.getX(), r.getBottom(), false));
-        g.fillRoundedRectangle(r, 12);
-        if (over)
-        {
-            g.setColour(juce::Colours::white.withAlpha(0.25f));
-            g.drawRoundedRectangle(r, 12, 2);
-        }
-        const bool on = getToggleState();
-        const auto led = juce::Rectangle<float>(12, 12).withCentre({ r.getCentreX(), r.getY() + 24 });
-        g.setColour(on ? juce::Colour(0xffff3b30) : juce::Colour(0xff3a1210));
-        g.fillEllipse(led);
-        if (on)
-        {
-            g.setColour(juce::Colour(0x55ff3b30));
-            g.fillEllipse(led.expanded(6));
-        }
-        g.setColour(juce::Colours::white);
-        g.setFont(juce::FontOptions(18.0f, juce::Font::bold));
-        g.drawText(getName().toUpperCase(), r.withTrimmedTop(44).removeFromTop(30), juce::Justification::centred);
+        const auto box = getLocalBounds().toFloat().reduced(10, 4);
+        g.setColour(juce::Colour(0xff1c1c1e)); // jacks on the sides
+        for (float x : { box.getX() - 6, box.getRight() - 2 })
+            g.fillRoundedRectangle(x, box.getY() + 50, 8, 30, 2);
+        g.setColour(juce::Colours::black.withAlpha(0.55f));
+        g.fillRoundedRectangle(box.translated(0, 6), 16);
+        g.setGradientFill(juce::ColourGradient(juce::Colour(0xffd8dadc), 0, box.getY(), juce::Colour(0xff6c6e72), 0, box.getBottom(), false));
+        g.fillRoundedRectangle(box, 16); // bent-metal rim, deeper at the bottom
+        const auto f = face();
+        g.setGradientFill(juce::ColourGradient(colour.brighter(0.08f), 0, f.getY(), colour.darker(0.12f), 0, f.getBottom(), false));
+        g.fillRoundedRectangle(f, 13);
+        g.setColour(juce::Colours::white.withAlpha(over ? 0.45f : 0.18f));
+        g.drawRoundedRectangle(f, 13, over ? 1.6f : 1.0f);
+
+        g.setColour(ink());
+        g.setFont(juce::FontOptions(28.0f, juce::Font::bold));
+        const auto nameArea = f.withTrimmedTop(f.getHeight() - 158).removeFromTop(36).reduced(8, 0);
+        g.drawFittedText(getName().toLowerCase(), nameArea.toNearestInt(), juce::Justification::centred, 1, 0.6f);
         if (placeholder)
         {
-            g.setColour(juce::Colours::white.withAlpha(0.55f));
+            g.setColour(ink().withAlpha(0.5f));
             g.setFont(juce::FontOptions(11.0f));
-            g.drawText("placeholder", r.withTrimmedTop(74).removeFromTop(16), juce::Justification::centred);
+            g.drawText("placeholder", nameArea.translated(0, 30).withHeight(14), juce::Justification::centred);
         }
-        const auto sw = juce::Rectangle<float>(46, 46).withCentre({ r.getCentreX(), r.getBottom() - 44 });
-        g.setGradientFill(juce::ColourGradient(juce::Colour(0xffe8e8e8), sw.getX(), sw.getY(), juce::Colour(0xff6a6a6a), sw.getRight(), sw.getBottom(), false));
+
+        const bool on = getToggleState();
+        const auto led = juce::Rectangle<float>(9, 9).withCentre({ f.getCentreX(), f.getBottom() - 92 });
+        if (on)
+        {
+            g.setGradientFill(juce::ColourGradient(juce::Colour(0x996fb6ff), led.getCentreX(), led.getCentreY(), juce::Colour(0x006fb6ff), led.getCentreX(), led.getY() - 9, true));
+            g.fillEllipse(led.expanded(9));
+        }
+        g.setColour(on ? juce::Colour(0xffd6ecff) : juce::Colour(0xff3a3f46));
+        g.fillEllipse(led);
+        g.setColour(juce::Colours::black.withAlpha(0.4f));
+        g.drawEllipse(led, 1);
+
+        const auto c = juce::Point<float>(f.getCentreX(), f.getBottom() - 46);
+        juce::Path nut; // hex nut under the stomp switch
+        nut.addPolygon(c, 6, 25, juce::MathConstants<float>::pi / 6);
+        g.setGradientFill(juce::ColourGradient(juce::Colour(0xfff2f2f2), c.x - 20, c.y - 20, juce::Colour(0xff6a6c70), c.x + 20, c.y + 22, false));
+        g.fillPath(nut);
+        g.setColour(juce::Colours::black.withAlpha(0.45f));
+        g.strokePath(nut, juce::PathStrokeType(1));
+        const auto sw = juce::Rectangle<float>(30, 30).withCentre(c);
+        g.setGradientFill(juce::ColourGradient(juce::Colour(0xff8e9196), sw.getX(), sw.getY(), juce::Colour(0xfff6f6f6), sw.getRight(), sw.getBottom(), false));
         g.fillEllipse(sw);
-        g.setColour(juce::Colour(0xff2a2a2a));
-        g.drawEllipse(sw, 2);
-        g.setColour(juce::Colours::white.withAlpha(0.8f));
-        g.setFont(juce::FontOptions(12.0f, juce::Font::bold));
-        g.drawText(on ? "ON" : "OFF", r.removeFromBottom(14), juce::Justification::centred);
+        g.setGradientFill(juce::ColourGradient(juce::Colour(0xfffafafa), sw.getX(), sw.getY(), juce::Colour(0xff9a9da2), sw.getRight(), sw.getBottom(), false));
+        g.fillEllipse(sw.reduced(4));
     }
     MJRAmpProcessor& proc;
     juce::Colour colour;
@@ -367,9 +425,9 @@ public:
     FxPage(MJRAmpProcessor& p, FxStage stage, juce::String from, juce::String to)
         : source(std::move(from)), destination(std::move(to))
     {
-        const juce::Colour palette[] = { juce::Colour(0xff2f5d8c), juce::Colour(0xff6b3fa0), juce::Colour(0xffb5651d), juce::Colour(0xff2e7d6b),
-                                         juce::Colour(0xff7a7a2a), juce::Colour(0xff3d6fb0), juce::Colour(0xff8c2f4f), juce::Colour(0xff4a4a8c),
-                                         juce::Colour(0xff9c4a1a), juce::Colour(0xff2a7a8c) };
+        const juce::Colour palette[] = { juce::Colour(0xffaab6c4), juce::Colour(0xff6f7d8f), juce::Colour(0xff4c5a73), juce::Colour(0xff2f6a64),
+                                         juce::Colour(0xffd5dbde), juce::Colour(0xff9a8c78), juce::Colour(0xff7a4f5a), juce::Colour(0xff8c9a82),
+                                         juce::Colour(0xff2c2d30), juce::Colour(0xff5e6f88) };
         for (int i = 0; i < numFx; ++i)
             if (fxChain[i].stage == stage)
                 addAndMakeVisible(*pedals.add(new Pedal(p, fxChain[i], palette[i % 10])));
@@ -390,10 +448,10 @@ public:
 
     void resized() override
     {
-        const int w = 170, gap = 40, total = pedals.size() * w + (pedals.size() - 1) * gap;
+        const int n = pedals.size(), gap = 32, w = juce::jlimit(180, 260, (getWidth() - 140 - (n - 1) * gap) / juce::jmax(n, 1)), total = n * w + (n - 1) * gap;
         int x = (getWidth() - total) / 2;
         for (auto* p : pedals)
-            p->setBounds(x, getHeight() / 2 - 230, w, 440), x += w + gap;
+            p->setBounds(x, getHeight() / 2 - 220, w, 440), x += w + gap;
     }
 
 private:
@@ -412,6 +470,9 @@ public:
     {
 #if MJR_HAS_PHOTO
         photo = juce::ImageCache::getFromMemory(BinaryData::amp_png, BinaryData::amp_pngSize);
+#endif
+#if MJR_HAS_CAB
+        cabPhoto = juce::ImageCache::getFromMemory(BinaryData::cab_png, BinaryData::cab_pngSize);
 #endif
         for (int i = 0; i < 6; ++i)
         {
@@ -438,6 +499,9 @@ public:
         paintPanelControls(g);
 
         const char* names[] = { "PRESENCE", "BASS", "MIDDLE", "TREBLE", "VOL I", "VOL II" };
+        const float x0 = knobCentre(0).x - 34, x1 = knobCentre(5).x + 34; // dark plate: readable over tolex and grille
+        g.setColour(juce::Colours::black.withAlpha(0.72f));
+        g.fillRoundedRectangle(x0, band.getY() + 3, x1 - x0, 34, 6);
         for (int i = 0; i < 6; ++i)
         {
             const float x = knobCentre(i).x;
@@ -604,6 +668,16 @@ private:
     void paintCab(juce::Graphics& g)
     {
         auto cab = getLocalBounds().toFloat().withTop(head().getBottom()).reduced(14, 0).withTrimmedBottom(-20);
+        if (cabPhoto.isValid()) // full width, like a real stack: the top edge, then the grille window around the logo
+        {
+            const float sc = cab.getWidth() / (float)cabPhoto.getWidth(), top = 52; // source px: tolex and piping
+            const int w = cabPhoto.getWidth(), H = cabPhoto.getHeight();
+            const float rest = ((float)getHeight() - cab.getY()) / sc - top;
+            const int srcY = juce::jlimit((int)top, juce::jmax((int)top, H - (int)rest), (int)(H * 0.52f - rest / 2));
+            g.drawImage(cabPhoto, (int)cab.getX(), (int)cab.getY(), (int)cab.getWidth(), (int)(top * sc + 1), 0, 0, w, (int)top);
+            g.drawImage(cabPhoto, (int)cab.getX(), (int)(cab.getY() + top * sc), (int)cab.getWidth(), (int)(rest * sc) + 1, 0, srcY, w, juce::jmin((int)rest, H - srcY));
+            return;
+        }
         g.setColour(juce::Colour(0xff151515));
         g.fillRoundedRectangle(cab, 10);
         g.setColour(juce::Colour(0xff2e2e2e));
@@ -668,7 +742,7 @@ private:
     MJRAmpProcessor& proc;
     juce::ParameterAttachment ampAtt, captureAtt;
     Hot hover = Hot::none;
-    juce::Image photo;
+    juce::Image photo, cabPhoto;
     juce::OwnedArray<Knob> knobs;
     juce::Rectangle<float> band;
 };
