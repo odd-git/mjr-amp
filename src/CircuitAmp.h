@@ -321,7 +321,7 @@ public:
 
     // Calibration (ponytail: tuned against the captures and by ear; see tests).
     float inputVolts = 1.5f;   // DI full scale -> volts at the input jack
-    float outputScale = 0.02f; // speaker volts -> plugin level
+    float outputScale = 0.002f; // speaker volts -> plugin level
 
 private:
     float sample(float di)

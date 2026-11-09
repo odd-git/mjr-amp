@@ -4,6 +4,7 @@
 #include <juce_dsp/juce_dsp.h>
 #include "Engine.h"
 #include "NamPedal.h"
+#include "CircuitAmp.h"
 
 struct Capture
 {
@@ -110,6 +111,7 @@ public:
     juce::File getIrFile(int slot) const { return irFiles[(size_t)slot]; }
     void poll(); // applies capture changes; called by the timer
     void resetKnobsToCapture(); // knobs back to the active capture's recorded settings
+    bool circuitMode() const { return ampMode->load() < 0.5f; } // the circuit model, else the NAM captures
     bool isIdle() const { return engine.isIdle() && namPedals[0].isIdle() && namPedals[1].isIdle(); }
 
     // NAM pedals, by fxChain index: Boost (one knob, captures named "... 65%") and Drive ("Drive 7 Tone 7 Level 9").
@@ -153,6 +155,7 @@ private:
     std::array<float, 3> pedalKnobs(int fx) const;
 
     NamEngine engine;
+    CircuitAmp circuit;
     juce::File libraryDir;
     std::atomic<int> loadedCapture { -1 };
     std::array<std::atomic<float>, 6> baseline {}; // knob values the active capture was recorded with
@@ -169,7 +172,7 @@ private:
     juce::AudioBuffer<float> dry, slotBuf;
 
     std::array<std::atomic<float>*, 6> knob {};
-    std::atomic<float> *input, *output, *inputSource, *gate, *transpose, *ampOn, *metroOn, *bpm, *beats, *metroLevel;
+    std::atomic<float> *input, *output, *inputSource, *gate, *transpose, *ampOn, *ampMode, *jack, *metroOn, *bpm, *beats, *metroLevel;
 
     void addMetronome(juce::AudioBuffer<float>&, int numOut);
     void runFx(FxStage, juce::AudioBuffer<float>&, int numChannels);

@@ -604,7 +604,9 @@ class Rig : public juce::Component, public juce::TooltipClient
 public:
     Rig(MJRAmpProcessor& p)
         : proc(p), ampAtt(*p.params.getParameter("ampOn"), [this](float) { repaint(); }),
-          captureAtt(*p.params.getParameter("capture"), [this](float) { repaint(); })
+          captureAtt(*p.params.getParameter("capture"), [this](float) { repaint(); }),
+          modeAtt(*p.params.getParameter("ampMode"), [this](float) { repaint(); }),
+          jackAtt(*p.params.getParameter("jack"), [this](float) { repaint(); })
     {
 #if MJR_HAS_PHOTO
         photo = juce::ImageCache::getFromMemory(BinaryData::amp_png, BinaryData::amp_pngSize);
@@ -699,6 +701,8 @@ public:
             auto* prm = proc.params.getParameter("ampOn");
             prm->setValueNotifyingHost(prm->getValue() > 0.5f ? 0.0f : 1.0f);
         }
+        else if (h == Hot::inputs && proc.circuitMode())
+            plugInto(e.position.x > at(762, 0).x);
         else if (h == Hot::inputs)
             switchChannel();
     }
@@ -710,6 +714,7 @@ public:
     juce::String getTooltip() override
     {
         return hover == Hot::power ? "Amp on/off (off: pedals go straight to the cab)"
+             : hover == Hot::inputs && proc.circuitMode() ? "Inputs: I (bright) or II (normal); click I again to jump it to II"
              : hover == Hot::inputs ? "Channel: input I, or I jumped to II (JU)"
                                     : juce::String();
     }
@@ -734,6 +739,15 @@ private:
         const int i = ((juce::AudioParameterChoice*)proc.params.getParameter("capture"))->getIndex();
         return i >= 0 && i < (int)proc.captures.size() ? &proc.captures[(size_t)i] : nullptr;
     }
+    // Circuit: the lead goes into the jack clicked; clicking I again adds (or removes) the jumper to II.
+    int jack() const { return ((juce::AudioParameterChoice*)proc.params.getParameter("jack"))->getIndex(); }
+    void plugInto(bool two)
+    {
+        const int j = two ? 1 : jack() == 0 ? 2 : 0;
+        auto* prm = proc.params.getParameter("jack");
+        prm->setValueNotifyingHost(prm->convertTo0to1((float)j));
+    }
+
     // Same level/voicing/pedal on the other channel if it was captured, else the closest match.
     void switchChannel()
     {
@@ -809,9 +823,14 @@ private:
             g.setColour(juce::Colours::white.withAlpha(0.18f));
             g.strokePath(p, juce::PathStrokeType(1.5f * s));
         };
-        cable(at(735, 303), at(740, 360), at(770, 395), at(805, 430), juce::Colour(0xff151515)); // guitar lead, into I
-        plug(at(735, 303));
-        if (c != nullptr && c->channel == "JU") // jumper: I low -> II high
+        const bool circuit = proc.circuitMode(), intoII = circuit && jack() == 1;
+        const bool jumped = circuit ? jack() == 2 : c != nullptr && c->channel == "JU";
+        if (intoII)
+            cable(at(790, 303), at(795, 360), at(800, 395), at(805, 430), juce::Colour(0xff151515)); // guitar lead, into II
+        else
+            cable(at(735, 303), at(740, 360), at(770, 395), at(805, 430), juce::Colour(0xff151515)); // guitar lead, into I
+        plug(at(intoII ? 790.0f : 735.0f, 303));
+        if (jumped) // jumper: I low -> II high
         {
             cable(at(735, 338), at(760, 372), at(820, 345), at(790, 303), juce::Colour(0xff8a2a22));
             plug(at(735, 338));
@@ -900,7 +919,7 @@ private:
     }
 
     MJRAmpProcessor& proc;
-    juce::ParameterAttachment ampAtt, captureAtt;
+    juce::ParameterAttachment ampAtt, captureAtt, modeAtt, jackAtt;
     Hot hover = Hot::none;
     juce::Image photo, cabPhoto, headScaled, cabScaled;
     juce::OwnedArray<Knob> knobs;
@@ -1384,14 +1403,23 @@ public:
         prevCapture.onClick = [this] { stepCapture(-1); };
         nextCapture.onClick = [this] { stepCapture(1); };
 
-        for (auto* l : { &captureLabel, &captured })
+        captured.setJustificationType(juce::Justification::centred);
+        captured.setColour(juce::Label::textColourId, col::dim);
+
+        for (auto* b : { &circuitButton, &captureButton })
         {
-            l->setJustificationType(juce::Justification::centred);
-            l->setColour(juce::Label::textColourId, col::dim);
+            b->setRadioGroupId(2);
+            b->setClickingTogglesState(true);
+            b->onClick = [this, b]
+            {
+                auto* prm = p.params.getParameter("ampMode");
+                prm->setValueNotifyingHost(prm->convertTo0to1(b == &captureButton ? 1.0f : 0.0f));
+            };
         }
-        captureLabel.setText("CAPTURE", juce::dontSendNotification);
-        captureLabel.setFont(juce::FontOptions(12.0f, juce::Font::bold));
-        captureLabel.setColour(juce::Label::textColourId, col::text);
+        circuitButton.setButtonText("CIRCUIT");
+        circuitButton.setTooltip("Circuit model of the amp: the knobs act as on the real panel");
+        captureButton.setButtonText("CAPTURE");
+        captureButton.setTooltip("NAM captures of the real amp, chosen from the knobs");
 
         resetKnobs.setButtonText("Reset knobs");
         resetKnobs.setTooltip("Set the amp knobs back to the capture's recorded settings");
@@ -1448,8 +1476,9 @@ public:
         for (juce::Component* c : { (juce::Component*)&title, (juce::Component*)&input, (juce::Component*)&gate, (juce::Component*)&transpose, (juce::Component*)&inputSwitch, (juce::Component*)&output, (juce::Component*)&inMeter,
                                     (juce::Component*)&outMeter, (juce::Component*)&tunerButton, (juce::Component*)&metroButton,
                                     (juce::Component*)&libraryButton, (juce::Component*)&prevCapture, (juce::Component*)&capture,
-                                    (juce::Component*)&nextCapture, (juce::Component*)&captureLabel, (juce::Component*)&captured,
-                                    (juce::Component*)&resetKnobs, (juce::Component*)&rig })
+                                    (juce::Component*)&nextCapture, (juce::Component*)&captured,
+                                    (juce::Component*)&resetKnobs, (juce::Component*)&circuitButton, (juce::Component*)&captureButton,
+                                    (juce::Component*)&rig })
             content.addAndMakeVisible(c);
         for (auto* b : irs)
             content.addAndMakeVisible(b);
@@ -1517,11 +1546,12 @@ private:
         output.setBounds(baseW - 190, 56, 130, 150);
         outMeter.setBounds(baseW - 40, 60, 6, 140);
 
+        circuitButton.setBounds(586, 122, 100, 24); // where the CAPTURE heading was: the buttons name the section
+        captureButton.setBounds(686, 122, 100, 24);
         prevCapture.setBounds(468, 88, 32, 34);
         capture.setBounds(506, 88, 360, 34);
         nextCapture.setBounds(872, 88, 32, 34);
-        captureLabel.setBounds(506, 126, 360, 18);
-        captured.setBounds(436, 146, 500, 18);
+        captured.setBounds(436, 150, 500, 18);
         resetKnobs.setBounds(631, 170, 110, 26);
 
         for (int s = 0; s < irs.size(); ++s)
@@ -1550,6 +1580,7 @@ private:
         return (c.channel == "I" ? "I" : "I+II") + juce::String("   ") + c.level + "   " + c.voicing + (c.pedal.isEmpty() ? "" : "   + " + c.pedal);
     }
     int captureIndex() const { return ((juce::AudioParameterChoice*)p.params.getParameter("capture"))->getIndex(); }
+    int jackIndex() const { return ((juce::AudioParameterChoice*)p.params.getParameter("jack"))->getIndex(); }
 
     void selectCapture(int idx)
     {
@@ -1568,6 +1599,12 @@ private:
 
     void refreshCapture()
     {
+        const bool circuit = shownCircuit = p.circuitMode();
+        shownJack = jackIndex();
+        (circuit ? circuitButton : captureButton).setToggleState(true, juce::dontSendNotification);
+        for (juce::Component* c : { (juce::Component*)&prevCapture, (juce::Component*)&capture, (juce::Component*)&nextCapture,
+                                    (juce::Component*)&resetKnobs })
+            c->setVisible(!circuit);
         const auto& c = p.captures[(size_t)captureIndex()];
         capture.setSelectedId(captureIndex() + 1, juce::dontSendNotification);
         juce::String info;
@@ -1585,7 +1622,13 @@ private:
         shownCapture = captureIndex();
         shownLibrary = p.getLibraryDir(); // the file check touches the disk: only on a change, not every tick
         rig.missing.setText("Capture not found.\nChoose the library folder (LIBRARY).", juce::dontSendNotification);
-        rig.missing.setVisible(!shownLibrary.getChildFile(c.file).existsAsFile());
+        rig.missing.setVisible(!circuit && !shownLibrary.getChildFile(c.file).existsAsFile());
+        if (circuit)
+        {
+            const char* inputs[] = { "input I (bright)", "input II (normal)", "input I jumped to II" };
+            captured.setText(juce::String("Circuit model of the 200 W head  -  ") + inputs[shownJack] + "  -  click the input jacks to change",
+                             juce::dontSendNotification);
+        }
     }
 
     // Lists the presets folder; the current preset (if its file is there) is shown selected.
@@ -1639,7 +1682,8 @@ private:
 
     void timerCallback() override
     {
-        if (captureIndex() != shownCapture || p.getLibraryDir() != shownLibrary)
+        if (captureIndex() != shownCapture || p.getLibraryDir() != shownLibrary || p.circuitMode() != shownCircuit
+            || jackIndex() != shownJack)
             refreshCapture();
         if (p.currentPreset != shownPreset) // a session or preset loaded from elsewhere
             refreshPresets();
@@ -1668,10 +1712,10 @@ private:
     Look look;
     juce::TooltipWindow tooltips { this, 600 };
     juce::Component content;
-    juce::Label title, captureLabel, captured;
+    juce::Label title, captured;
     std::vector<int> order;
     juce::ComboBox capture;
-    juce::TextButton prevCapture, nextCapture, resetKnobs;
+    juce::TextButton prevCapture, nextCapture, resetKnobs, circuitButton, captureButton;
     IconButton preNav { "PRE FX", IconButton::pedal }, ampNav { "AMP", IconButton::amp }, eqNav { "EQ", IconButton::eq },
         postNav { "POST FX", IconButton::pedal };
     FxPage prePage { p, FxStage::pre, "INPUT", "AMP" }, eqPage { p, FxStage::eq, "AMP", "CAB" },
@@ -1689,7 +1733,8 @@ private:
     PresetBox presetBox;
     juce::TextButton prevPreset, nextPreset, savePresetButton;
     juce::String shownPreset;
-    int shownCapture = -1, shownBeat = 0;
+    int shownCapture = -1, shownBeat = 0, shownJack = -1;
+    bool shownCircuit = false;
     juce::File shownLibrary;
     juce::uint32 beatLit = 0;
 };

@@ -38,6 +38,14 @@ input with the **INPUT CH** switch. Close other apps that hold the interface dir
 - **METRO** opens the metronome: tempo, tap tempo, beats per bar (accented downbeat), level.
   In a DAW it follows the host tempo and bar position while the transport is playing.
 
+## Amp models
+
+- **CIRCUIT** (default): a model of the 1968 200 W head's circuit, built from its service drawing
+  (`src/CircuitAmp.h`): triode stages with bias shift, the plate-driven tone stack solved exactly,
+  4x KT88 ultra-linear power amp with global feedback and Presence. The knobs act as on the real
+  panel. Click the input jacks to plug into I (bright), II, or I jumped to II. Needs no captures.
+- **CAPTURE**: the NAM captures below.
+
 ## Capture library
 
 Choose the folder with your `.nam` captures and IRs from **Library...**. The captures

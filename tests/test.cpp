@@ -179,6 +179,7 @@ int main(int argc, char** argv)
         {
             MJRAmpProcessor p;
             p.setLibraryDir(lib);
+            setParam(p, "ampMode", 1.0f); // the NAM captures (the circuit has its own line above)
             for (int s = 1; !irs && s <= MJRAmpProcessor::numIrSlots; ++s)
                 setParam(p, ("ir" + juce::String(s) + "On").toRawUTF8(), 0.0f);
             for (auto& fx : fxChain)
@@ -247,6 +248,7 @@ int main(int argc, char** argv)
     {
         MJRAmpProcessor p;
         p.setLibraryDir(lib);
+        setParam(p, "ampMode", 1.0f);
         for (int s = 1; s <= MJRAmpProcessor::numIrSlots; ++s)
             setParam(p, ("ir" + juce::String(s) + "On").toRawUTF8(), 0.0f);
         p.prepareToPlay(48000, block);
@@ -604,9 +606,14 @@ int main(int argc, char** argv)
             for (int i = 0; i < (int)p.captures.size(); ++i)
                 if (p.captures[(size_t)i].displayName() == "JU Crunch BAL")
                     setParam(p, "capture", (float)i);
+            setParam(p, "ampMode", 1.0f);
             setParam(p, "ampOn", 0.0f);
-            save("amp-off-ju.png"); // lever down, lamp dark, jumper cable in
+            save("amp-off-ju.png"); // capture mode: lever down, lamp dark, jumper cable in
             setParam(p, "ampOn", 1.0f);
+            setParam(p, "ampMode", 0.0f);
+            setParam(p, "jack", 1.0f);
+            save("circuit-ii.png"); // circuit mode: lead in input II
+            setParam(p, "jack", 0.0f);
             setParam(p, "capture", (float)cap);
         }
         std::function<juce::Button*(juce::Component*, const juce::String&)> find = [&](juce::Component* c, const juce::String& text) -> juce::Button*

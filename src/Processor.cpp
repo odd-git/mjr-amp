@@ -78,6 +78,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout(const std::vector
                                               AudioParameterIntAttributes().withLabel("st").withStringFromValueFunction(
                                                   [](int v, int) { return v == 0 ? String("Off") : (v > 0 ? "+" : "") + String(v); })));
     l.add(std::make_unique<AudioParameterBool>(ParameterID { "ampOn", 1 }, "Amp On", true));
+    l.add(std::make_unique<AudioParameterChoice>(ParameterID { "ampMode", 1 }, "Amp Model", StringArray { "Circuit", "Capture" }, 0));
+    l.add(std::make_unique<AudioParameterChoice>(ParameterID { "jack", 1 }, "Input Jack", StringArray { "I", "II", "I+II" }, 0));
     l.add(db("output", "Output", -24.0f, 12.0f, 0.0f));
 
     for (int s = 1; s <= MJRAmpProcessor::numIrSlots; ++s)
@@ -137,6 +139,8 @@ MJRAmpProcessor::MJRAmpProcessor()
     gate = params.getRawParameterValue("gate");
     transpose = params.getRawParameterValue("transpose");
     ampOn = params.getRawParameterValue("ampOn");
+    ampMode = params.getRawParameterValue("ampMode");
+    jack = params.getRawParameterValue("jack");
     metroOn = params.getRawParameterValue("metroOn");
     for (int i = 0; i < numFx; ++i)
     {
@@ -246,10 +250,12 @@ void MJRAmpProcessor::prepareToPlay(double sr, int maxBlock)
 {
     sampleRate = sr;
     engine.prepare(sr, maxBlock);
+    circuit.prepare(sr, maxBlock);
     for (auto& pedal : namPedals)
         pedal.prepare(sr, maxBlock);
-    // ponytail: the drive's resampler latency (host rate != 48k) is reported even when the pedal is off.
-    setLatencySamples(engine.getLatency() + namPedals[0].getLatency() + namPedals[1].getLatency());
+    // ponytail: the larger of the two amp models' latencies, and the drive's resampler latency (host rate != 48k),
+    // are reported whatever is active: a host can't follow latency changes at runtime.
+    setLatencySamples(std::max(engine.getLatency(), circuit.getLatency()) + namPedals[0].getLatency() + namPedals[1].getLatency());
 
     driveGain.reset(sr, 0.02);
     outGain.reset(sr, 0.02);
@@ -331,8 +337,9 @@ void MJRAmpProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
     // Volume knobs drive the capture harder or softer than it was recorded.
     const int cap = loadedCapture;
+    const bool modelled = circuitMode();
     float driveDb = 0.0f;
-    if (cap >= 0)
+    if (cap >= 0 && !modelled)
     {
         const bool i = captures[(size_t)cap].channel == "I";
         const float now = i ? knob[4]->load() : 0.5f * (knob[4]->load() + knob[5]->load());
@@ -357,13 +364,19 @@ void MJRAmpProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     driveGain.setTargetValue(juce::Decibels::decibelsToGain(input->load() + (amp ? driveDb : 0.0f)));
     driveGain.applyGain(mono, n);
 
-    if (amp)
+    if (amp && modelled)
+    {
+        circuit.setControls(knob[0]->load(), knob[1]->load(), knob[2]->load(), knob[3]->load(), knob[4]->load(),
+                            knob[5]->load(), (CircuitAmp::Jack)juce::roundToInt(jack->load()));
+        circuit.process(mono, n);
+    }
+    else if (amp)
         engine.process(mono, n);
     else
         juce::FloatVectorOperations::multiply(mono, 0.25f, n); // -12 dB: a raw DI into the cab is far hotter than the levelled amp
 
     updateFilters();
-    if (amp)
+    if (amp && !modelled) // the circuit's knobs are in the circuit
     {
         juce::dsp::AudioBlock<float> block(&mono, 1, (size_t)n);
         juce::dsp::ProcessContextReplacing<float> ctx(block);
