@@ -499,18 +499,21 @@ public:
         paintPanelControls(g);
 
         const char* names[] = { "PRESENCE", "BASS", "MIDDLE", "TREBLE", "VOL I", "VOL II" };
-        const float x0 = knobCentre(0).x - 34, x1 = knobCentre(5).x + 34; // dark plate: readable over tolex and grille
+        const float pitch = knobCentre(1).x - knobCentre(0).x; // one column per knob, as wide as the knob spacing
+        const float x0 = knobCentre(0).x - pitch / 2, x1 = knobCentre(5).x + pitch / 2; // dark plate: readable over tolex and grille
         g.setColour(juce::Colours::black.withAlpha(0.72f));
-        g.fillRoundedRectangle(x0, band.getY() + 3, x1 - x0, 34, 6);
+        g.fillRoundedRectangle(x0 - 4, band.getY() + 3, x1 - x0 + 8, 36, 6);
         for (int i = 0; i < 6; ++i)
         {
             const float x = knobCentre(i).x;
+            g.setColour(col::accent.withAlpha(0.8f)); // tick pointing up at the knob
+            g.fillRect(juce::Rectangle<float>(2, 4).withCentre({ x, band.getY() + 6 }));
             g.setColour(col::text);
             g.setFont(juce::FontOptions(9.5f, juce::Font::bold));
-            g.drawText(names[i], juce::Rectangle<float>(60, 14).withCentre({ x, band.getY() + 13 }), juce::Justification::centred);
+            g.drawFittedText(names[i], juce::Rectangle<float>(pitch - 4, 12).withCentre({ x, band.getY() + 16 }).toNearestInt(), juce::Justification::centred, 1, 0.5f);
             g.setColour(col::accent);
             g.setFont(juce::FontOptions(12.0f));
-            g.drawText(juce::String(knobs[i]->getValue(), 1), juce::Rectangle<float>(60, 14).withCentre({ x, band.getY() + 28 }), juce::Justification::centred);
+            g.drawText(juce::String(knobs[i]->getValue(), 1), juce::Rectangle<float>(60, 14).withCentre({ x, band.getY() + 30 }), juce::Justification::centred);
         }
     }
 
