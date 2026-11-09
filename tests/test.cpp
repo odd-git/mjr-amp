@@ -66,6 +66,41 @@ int main(int argc, char** argv)
     juce::AudioBuffer<float> di(1, (int)reader->lengthInSamples);
     reader->read(&di, 0, di.getNumSamples(), 0, true, false);
 
+    // 0. Benchmark (informative, machine dependent): seconds of audio per second of CPU, block 128.
+    {
+        auto bench = [&](const char* label, double sr, bool irs, bool allFx)
+        {
+            MJRAmpProcessor p;
+            p.setLibraryDir(lib);
+            for (int s = 1; !irs && s <= MJRAmpProcessor::numIrSlots; ++s)
+                setParam(p, ("ir" + juce::String(s) + "On").toRawUTF8(), 0.0f);
+            for (auto& fx : fxChain)
+                if (allFx)
+                    setParam(p, (juce::String(fx.id) + "On").toRawUTF8(), 1.0f);
+            p.prepareToPlay(sr, 128);
+            waitIdle(p, 128);
+            juce::AudioBuffer<float> b(2, (int)sr);
+            auto fill = [&]
+            {
+                b.clear();
+                b.copyFrom(0, 0, di, 0, 0, std::min(di.getNumSamples(), b.getNumSamples()));
+            };
+            fill();
+            run(p, b, 128); // warm-up: IRs swap in on their loader thread
+            const auto t0 = juce::Time::getHighResolutionTicks();
+            for (int i = 0; i < 10; ++i)
+                fill(), run(p, b, 128);
+            const double cpu = juce::Time::highResolutionTicksToSeconds(juce::Time::getHighResolutionTicks() - t0);
+            std::cout << "bench " << label << ": " << juce::String(10.0 / cpu, 1) << "x real time\n";
+        };
+        bench("amp only      ", 48000, false, false);
+        bench("amp + cab     ", 48000, true, false);
+        bench("full chain    ", 48000, true, true);
+        bench("amp + cab 44.1", 44100, true, false);
+    }
+    if (std::getenv("MJR_BENCH_ONLY") != nullptr)
+        return 0;
+
     // 1. Every capture loads and makes sound.
     {
         MJRAmpProcessor p;

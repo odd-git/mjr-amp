@@ -492,8 +492,8 @@ public:
     {
         paintCab(g);
         const auto area = head();
-        if (photo.isValid())
-            g.drawImage(photo, area);
+        if (headScaled.isValid())
+            g.drawImage(headScaled, area);
         else
             paintDrawnHead(g, area);
         paintPanelControls(g);
@@ -525,6 +525,30 @@ public:
             knobs[i]->setBounds(juce::Rectangle<float>(knobR * 2.4f * s, knobR * 2.4f * s).withCentre(knobCentre(i)).toNearestInt());
         band = { area.getX() + 40, area.getBottom() + 8, area.getWidth() - 80, 40 };
         missing.setBounds(area.reduced(area.getWidth() * 0.25f, area.getHeight() * 0.3f).toNearestInt());
+        scalePhotos();
+    }
+
+    // Photos resampled once per size (at the display's pixel density), not on every paint.
+    void scalePhotos()
+    {
+        const float px = juce::Component::getApproximateScaleFactorForComponent(this);
+        const auto area = head();
+        if (photo.isValid())
+            headScaled = photo.rescaled(juce::roundToInt(area.getWidth() * px), juce::roundToInt(area.getHeight() * px), juce::Graphics::highResamplingQuality);
+        const auto cab = getLocalBounds().toFloat().withTop(area.getBottom()).reduced(14, 0);
+        if (!cabPhoto.isValid() || cab.isEmpty())
+            return;
+        // Full width, like a real stack: the top edge, then the grille window around the logo.
+        const int w = cabPhoto.getWidth(), H = cabPhoto.getHeight(), outW = juce::roundToInt(cab.getWidth() * px),
+                  outH = juce::roundToInt(cab.getHeight() * px);
+        const float sc = (float)outW / (float)w, top = 52; // source px: tolex and piping
+        const float rest = (float)outH / sc - top;
+        const int srcY = juce::jlimit((int)top, juce::jmax((int)top, H - (int)rest), (int)(H * 0.52f - rest / 2));
+        cabScaled = juce::Image(juce::Image::ARGB, outW, outH, true);
+        juce::Graphics g(cabScaled);
+        g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+        g.drawImage(cabPhoto, 0, 0, outW, (int)(top * sc + 1), 0, 0, w, (int)top);
+        g.drawImage(cabPhoto, 0, (int)(top * sc), outW, (int)(rest * sc) + 1, 0, srcY, w, juce::jmin((int)rest, H - srcY));
     }
 
     // The panel's own controls: the two toggle switches power the amp on/off (off = pedals straight
@@ -671,14 +695,9 @@ private:
     void paintCab(juce::Graphics& g)
     {
         auto cab = getLocalBounds().toFloat().withTop(head().getBottom()).reduced(14, 0).withTrimmedBottom(-20);
-        if (cabPhoto.isValid()) // full width, like a real stack: the top edge, then the grille window around the logo
+        if (cabScaled.isValid())
         {
-            const float sc = cab.getWidth() / (float)cabPhoto.getWidth(), top = 52; // source px: tolex and piping
-            const int w = cabPhoto.getWidth(), H = cabPhoto.getHeight();
-            const float rest = ((float)getHeight() - cab.getY()) / sc - top;
-            const int srcY = juce::jlimit((int)top, juce::jmax((int)top, H - (int)rest), (int)(H * 0.52f - rest / 2));
-            g.drawImage(cabPhoto, (int)cab.getX(), (int)cab.getY(), (int)cab.getWidth(), (int)(top * sc + 1), 0, 0, w, (int)top);
-            g.drawImage(cabPhoto, (int)cab.getX(), (int)(cab.getY() + top * sc), (int)cab.getWidth(), (int)(rest * sc) + 1, 0, srcY, w, juce::jmin((int)rest, H - srcY));
+            g.drawImage(cabScaled, cab.withBottom((float)getHeight()));
             return;
         }
         g.setColour(juce::Colour(0xff151515));
@@ -745,7 +764,7 @@ private:
     MJRAmpProcessor& proc;
     juce::ParameterAttachment ampAtt, captureAtt;
     Hot hover = Hot::none;
-    juce::Image photo, cabPhoto;
+    juce::Image photo, cabPhoto, headScaled, cabScaled;
     juce::OwnedArray<Knob> knobs;
     juce::Rectangle<float> band;
 };
@@ -1390,6 +1409,9 @@ private:
         captured.setText(info, juce::dontSendNotification);
         resetKnobs.setEnabled(c.hasKnobs);
         shownCapture = captureIndex();
+        shownLibrary = p.getLibraryDir(); // the file check touches the disk: only on a change, not every tick
+        rig.missing.setText("Capture not found.\nChoose the library folder (LIBRARY).", juce::dontSendNotification);
+        rig.missing.setVisible(!shownLibrary.getChildFile(c.file).existsAsFile());
     }
 
     void chooseLibrary()
@@ -1409,11 +1431,8 @@ private:
 
     void timerCallback() override
     {
-        if (captureIndex() != shownCapture)
+        if (captureIndex() != shownCapture || p.getLibraryDir() != shownLibrary)
             refreshCapture();
-        const bool missing = !p.getLibraryDir().getChildFile(p.captures[(size_t)captureIndex()].file).existsAsFile();
-        rig.missing.setText("Capture not found.\nChoose the library folder (LIBRARY).", juce::dontSendNotification);
-        rig.missing.setVisible(missing);
 
         auto update = [](Meter& m, std::atomic<float>& peak)
         {
@@ -1458,6 +1477,7 @@ private:
     Meter inMeter, outMeter;
     std::unique_ptr<juce::FileChooser> chooser;
     int shownCapture = -1, shownBeat = 0;
+    juce::File shownLibrary;
     juce::uint32 beatLit = 0;
 };
 } // namespace

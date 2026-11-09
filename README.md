@@ -15,6 +15,9 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ```
 
+x86-64 builds use AVX2+FMA (any CPU from 2013 on; NAM runs about 25-30% faster). For older CPUs: `-DMJR_AVX2=OFF`.
+`MJR_BENCH_ONLY=1 build/mjr-test <library dir> <DI wav>` prints only the CPU benchmark.
+
 Linux deps (Debian/Ubuntu): `libasound2-dev libjack-jackd2-dev libfreetype-dev libfontconfig1-dev
 libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxext-dev libxcomposite-dev libxi-dev libgl1-mesa-dev`.
 

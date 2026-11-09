@@ -14,7 +14,8 @@ inline double detectPitch(const float* x, int n, double sampleRate, double lowes
     if (w < 4 || energy / n < 1e-7) // below ~ -70 dBFS: nothing to tune
         return 0;
 
-    std::vector<double> d((size_t)w + 1, 0.0);
+    thread_local std::vector<double> d; // reused: the tuner calls this 20 times a second
+    d.assign((size_t)w + 1, 0.0);
     for (int tau = 1; tau <= w; ++tau)
         for (int j = 0; j < w; ++j)
         {

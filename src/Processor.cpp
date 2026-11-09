@@ -167,8 +167,9 @@ void MJRAmpProcessor::setIrFile(int s, const juce::File& f)
     irFiles[(size_t)s] = f;
     irLoaded[(size_t)s] = f.existsAsFile();
     if (f.existsAsFile())
-        cab[(size_t)s].loadImpulseResponse(f, juce::dsp::Convolution::Stereo::no, juce::dsp::Convolution::Trim::yes, 0,
-                                           juce::dsp::Convolution::Normalise::yes);
+        // 200 ms is plenty for a cab (the library's 2 s IR has no energy left after 100 ms); convolution cost grows with length.
+        cab[(size_t)s].loadImpulseResponse(f, juce::dsp::Convolution::Stereo::no, juce::dsp::Convolution::Trim::yes,
+                                           (size_t)(0.2 * 48000), juce::dsp::Convolution::Normalise::yes);
 }
 
 void MJRAmpProcessor::poll()
@@ -257,6 +258,8 @@ void MJRAmpProcessor::updateFilters()
         if (std::abs(db - eqDb[b]) < 0.01f)
             continue;
         eqDb[b] = db;
+        if (std::abs(db) <= 0.01f)
+            eq[b].reset(); // bypassed from now on: no stale state when it comes back
         const float g = juce::Decibels::decibelsToGain(db);
         switch (b)
         {
@@ -325,8 +328,9 @@ void MJRAmpProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     {
         juce::dsp::AudioBlock<float> block(&mono, 1, (size_t)n);
         juce::dsp::ProcessContextReplacing<float> ctx(block);
-        for (auto& f : eq)
-            f.process(ctx);
+        for (size_t b = 0; b < eq.size(); ++b)
+            if (std::abs(eqDb[b]) > 0.01f) // knobs at the capture's settings: that band is flat, skip it
+                eq[b].process(ctx);
     }
 
     runFx(FxStage::eq, buffer, 1);
@@ -364,11 +368,18 @@ void MJRAmpProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
     runFx(FxStage::post, buffer, numOut);
 
     outGain.setTargetValue(juce::Decibels::decibelsToGain(output->load()));
-    for (int i = 0; i < n; ++i)
-    {
-        const float g = outGain.getNextValue();
+    if (!outGain.isSmoothing())
         for (int ch = 0; ch < numOut; ++ch)
-            buffer.getWritePointer(ch)[i] *= g;
+            buffer.applyGain(ch, 0, n, outGain.getTargetValue());
+    else
+    {
+        float* const* out = buffer.getArrayOfWritePointers();
+        for (int i = 0; i < n; ++i)
+        {
+            const float g = outGain.getNextValue();
+            for (int ch = 0; ch < numOut; ++ch)
+                out[ch][i] *= g;
+        }
     }
     for (int ch = numOut; ch < buffer.getNumChannels(); ++ch)
         buffer.clear(ch, 0, n);
@@ -441,6 +452,7 @@ void MJRAmpProcessor::addMetronome(juce::AudioBuffer<float>& buffer, int numOut)
     const double samplesPerBeat = sampleRate * 60.0 / tempo;
     const float gain = juce::Decibels::decibelsToGain(metroLevel->load());
     const int clickLen = (int)(0.03 * sampleRate);
+    float* const* out = buffer.getArrayOfWritePointers();
 
     for (int i = 0; i < n; ++i)
     {
@@ -467,7 +479,7 @@ void MJRAmpProcessor::addMetronome(juce::AudioBuffer<float>& buffer, int numOut)
             const float t = (float)clickPos++ / (float)sampleRate;
             const float v = gain * std::sin(juce::MathConstants<float>::twoPi * clickFreq * t) * std::exp(-t / 0.006f);
             for (int ch = 0; ch < numOut; ++ch)
-                buffer.getWritePointer(ch)[i] += v;
+                out[ch][i] += v;
         }
     }
 }

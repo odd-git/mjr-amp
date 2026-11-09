@@ -5,6 +5,13 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
 
+# Eigen (inside NAM) picks its SIMD at compile time: AVX2+FMA speeds up the WaveNet a lot but needs a 2013+ x86 CPU.
+# Set for the whole project, so every file sees the same Eigen alignment.
+option(MJR_AVX2 "x86-64 builds: compile with AVX2+FMA" ON)
+if(MJR_AVX2 AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64" AND NOT CMAKE_OSX_ARCHITECTURES)
+    add_compile_options("$<IF:$<CXX_COMPILER_ID:MSVC>,/arch:AVX2,-mavx2;-mfma>")
+endif()
+
 add_subdirectory(libs/JUCE)
 
 # --- NAM core (MIT): built straight from sources, its own CMake only builds tools
