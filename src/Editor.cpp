@@ -1332,6 +1332,18 @@ private:
     juce::TextButton advanced;
 };
 
+// Preset menu: re-reads the presets folder each time it opens, so files added by hand show up.
+struct PresetBox : juce::ComboBox
+{
+    std::function<void()> beforePopup;
+    void showPopup() override
+    {
+        if (beforePopup)
+            beforePopup();
+        juce::ComboBox::showPopup();
+    }
+};
+
 class Editor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
@@ -1414,6 +1426,26 @@ public:
         }
         libraryButton.onClick = [this] { chooseLibrary(); };
 
+        presetBox.setTextWhenNothingSelected("No preset");
+        presetBox.setTooltip("Presets: " + p.presetDir.getFullPathName());
+        presetBox.beforePopup = [this] { refreshPresets(); };
+        presetBox.onChange = [this]
+        {
+            const auto files = p.listPresets();
+            if (const int i = presetBox.getSelectedId() - 1; i >= 0 && i < files.size())
+                p.loadPreset(files[i]);
+        };
+        prevPreset.setButtonText("<");
+        nextPreset.setButtonText(">");
+        prevPreset.onClick = [this] { stepPreset(-1); };
+        nextPreset.onClick = [this] { stepPreset(1); };
+        savePresetButton.setButtonText("Save");
+        savePresetButton.setTooltip("Save the current sound as a preset");
+        savePresetButton.onClick = [this] { askPresetName(); };
+        for (juce::Component* c : { (juce::Component*)&prevPreset, (juce::Component*)&presetBox, (juce::Component*)&nextPreset, (juce::Component*)&savePresetButton })
+            content.addAndMakeVisible(c);
+        refreshPresets();
+
         for (int s = 0; s < MJRAmpProcessor::numIrSlots; ++s)
             irs.add(new IrBlock(p, s));
 
@@ -1470,6 +1502,10 @@ private:
     void layout()
     {
         title.setBounds(20, 8, 120, 20);
+        prevPreset.setBounds(baseW - 470, 14, 28, 28);
+        presetBox.setBounds(baseW - 438, 14, 250, 28);
+        nextPreset.setBounds(baseW - 184, 14, 28, 28);
+        savePresetButton.setBounds(baseW - 148, 14, 70, 28);
         int x = baseW / 2 - 140; // page navigation, in signal order
         for (auto* b : { &preNav, &ampNav, &eqNav, &postNav })
             b->setBounds(x, 8, 70, 58), x += 70;
@@ -1556,6 +1592,40 @@ private:
         rig.missing.setVisible(!shownLibrary.getChildFile(c.file).existsAsFile());
     }
 
+    // Lists the presets folder; the current preset (if its file is there) is shown selected.
+    void refreshPresets()
+    {
+        shownPreset = p.currentPreset;
+        presetBox.clear(juce::dontSendNotification);
+        const auto files = p.listPresets();
+        for (int i = 0; i < files.size(); ++i)
+        {
+            presetBox.addItem(files[i].getFileNameWithoutExtension(), i + 1);
+            if (files[i].getFileNameWithoutExtension() == p.currentPreset)
+                presetBox.setSelectedId(i + 1, juce::dontSendNotification);
+        }
+    }
+
+    void stepPreset(int dir)
+    {
+        refreshPresets();
+        if (const int n = presetBox.getNumItems(); n > 0)
+            presetBox.setSelectedId((presetBox.getSelectedId() - 1 + dir + n) % n + 1); // loads it (onChange)
+    }
+
+    void askPresetName()
+    {
+        auto* w = new juce::AlertWindow("Save preset", "Name (an existing preset with this name is replaced):", juce::MessageBoxIconType::NoIcon, this);
+        w->addTextEditor("name", p.currentPreset);
+        w->addButton("Save", 1, juce::KeyPress(juce::KeyPress::returnKey));
+        w->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+        w->enterModalState(true, juce::ModalCallbackFunction::create([this, w](int result)
+        {
+            if (result == 1 && p.savePreset(w->getTextEditorContents("name")))
+                refreshPresets();
+        }), true);
+    }
+
     void chooseLibrary()
     {
         chooser = std::make_unique<juce::FileChooser>("Capture library", p.getLibraryDir());
@@ -1575,6 +1645,8 @@ private:
     {
         if (captureIndex() != shownCapture || p.getLibraryDir() != shownLibrary)
             refreshCapture();
+        if (p.currentPreset != shownPreset) // a session or preset loaded from elsewhere
+            refreshPresets();
 
         auto update = [](Meter& m, std::atomic<float>& peak)
         {
@@ -1618,6 +1690,9 @@ private:
     LabeledKnob input, gate, transpose, output;
     Meter inMeter, outMeter;
     std::unique_ptr<juce::FileChooser> chooser;
+    PresetBox presetBox;
+    juce::TextButton prevPreset, nextPreset, savePresetButton;
+    juce::String shownPreset;
     int shownCapture = -1, shownBeat = 0;
     juce::File shownLibrary;
     juce::uint32 beatLit = 0;

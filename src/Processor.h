@@ -113,6 +113,13 @@ public:
     void resetKnobsToCapture(); // knobs back to the active capture's recorded settings
     bool isIdle() const { return engine.isIdle() && drivePedal.isIdle(); }
     void setDriveFolder(const juce::File&);
+
+    // User presets: the tone (capture, knobs, effects, IRs) as XML files, without this machine's folders.
+    juce::File presetDir = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("MJR Amp/Presets");
+    juce::Array<juce::File> listPresets() const;
+    bool savePreset(const juce::String& name); // overwrites a preset with the same name
+    bool loadPreset(const juce::File&);
+    juce::String currentPreset; // shown in the editor; kept in the session
     NamPedal drivePedal; // the editor reads its folder and current capture
 
     std::vector<Capture> captures; // before params: the parameter layout is built from it
@@ -130,6 +137,8 @@ public:
 private:
     void timerCallback() override { poll(); }
     void loadCapture(int index, bool resetKnobs);
+    juce::ValueTree makeState(bool withFolders);
+    void applyState(const juce::ValueTree&);
     void updateFilters();
     void updateGraphicEq();
 

@@ -557,35 +557,76 @@ void MJRAmpProcessor::addMetronome(juce::AudioBuffer<float>& buffer, int numOut)
     }
 }
 
-void MJRAmpProcessor::getStateInformation(juce::MemoryBlock& dest)
+// Session state = parameters + IR files + preset name; the folders only when they belong (a session, not a preset).
+juce::ValueTree MJRAmpProcessor::makeState(bool withFolders)
 {
     auto state = params.copyState();
-    state.setProperty("libraryDir", libraryDir.getFullPathName(), nullptr);
-    state.setProperty("driveDir", drivePedal.getFolder().getFullPathName(), nullptr);
+    if (withFolders)
+    {
+        state.setProperty("libraryDir", libraryDir.getFullPathName(), nullptr);
+        state.setProperty("driveDir", drivePedal.getFolder().getFullPathName(), nullptr);
+        state.setProperty("preset", currentPreset, nullptr);
+    }
     for (int s = 0; s < numIrSlots; ++s)
         state.setProperty("irFile" + juce::String(s + 1), irFiles[(size_t)s].getFullPathName(), nullptr);
-    copyXmlToBinary(*state.createXml(), dest);
+    return state;
 }
 
-void MJRAmpProcessor::setStateInformation(const void* data, int size)
+void MJRAmpProcessor::applyState(const juce::ValueTree& state)
 {
-    auto xml = getXmlFromBinary(data, size);
-    if (xml == nullptr || !xml->hasTagName(params.state.getType()))
-        return;
-    auto state = juce::ValueTree::fromXml(*xml);
     params.replaceState(state);
     for (int s = 0; s < numIrSlots; ++s)
     {
         const auto path = state.getProperty("irFile" + juce::String(s + 1)).toString();
-        setIrFile(s, path.isEmpty() ? juce::File() : juce::File(path));
+        juce::File f = path.isEmpty() ? juce::File() : juce::File(path);
+        if (path.isNotEmpty() && !f.existsAsFile()) // moved or another machine: same name in the library
+            f = libraryDir.getChildFile(f.getFileName());
+        setIrFile(s, f);
     }
     if (const auto drive = state.getProperty("driveDir").toString(); drive.isNotEmpty())
         setDriveFolder(juce::File(drive));
-    const auto dir = state.getProperty("libraryDir").toString();
-    if (dir.isNotEmpty())
+    if (const auto dir = state.getProperty("libraryDir").toString(); dir.isNotEmpty())
         setLibraryDir(juce::File(dir));
-    // Keep the session's knobs: they are relative to the capture's own settings.
+    if (state.hasProperty("preset"))
+        currentPreset = state.getProperty("preset").toString();
+    // Keep the stored knobs: they are relative to the capture's own settings.
     loadCapture(((juce::AudioParameterChoice*)params.getParameter("capture"))->getIndex(), false);
+}
+
+void MJRAmpProcessor::getStateInformation(juce::MemoryBlock& dest) { copyXmlToBinary(*makeState(true).createXml(), dest); }
+
+void MJRAmpProcessor::setStateInformation(const void* data, int size)
+{
+    if (auto xml = getXmlFromBinary(data, size); xml != nullptr && xml->hasTagName(params.state.getType()))
+        applyState(juce::ValueTree::fromXml(*xml));
+}
+
+juce::Array<juce::File> MJRAmpProcessor::listPresets() const
+{
+    auto files = presetDir.findChildFiles(juce::File::findFiles, false, "*.mjrpreset");
+    files.sort();
+    return files;
+}
+
+bool MJRAmpProcessor::savePreset(const juce::String& name)
+{
+    const auto file = presetDir.getChildFile(juce::File::createLegalFileName(name.trim()) + ".mjrpreset");
+    if (name.trim().isEmpty() || !presetDir.createDirectory())
+        return false;
+    if (!makeState(false).createXml()->writeTo(file))
+        return false;
+    currentPreset = file.getFileNameWithoutExtension();
+    return true;
+}
+
+bool MJRAmpProcessor::loadPreset(const juce::File& file)
+{
+    auto xml = juce::XmlDocument::parse(file);
+    if (xml == nullptr || !xml->hasTagName(params.state.getType()))
+        return false;
+    applyState(juce::ValueTree::fromXml(*xml));
+    currentPreset = file.getFileNameWithoutExtension();
+    return true;
 }
 
 juce::AudioProcessorEditor* MJRAmpProcessor::createEditor() { return createMJREditor(*this); }

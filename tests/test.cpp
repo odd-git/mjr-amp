@@ -426,6 +426,36 @@ int main(int argc, char** argv)
         CHECK(std::abs(boosted / flat - 3.98f) < 0.2f, "eq 1 kHz +12 dB gave x" << boosted / flat);
     }
 
+    // 13. Presets: save, change, load -> the tone comes back; the library folder stays this machine's.
+    {
+        const auto dir = juce::File::createTempFile("mjr-presets");
+        MJRAmpProcessor p;
+        p.presetDir = dir;
+        p.setLibraryDir(lib);
+        *(juce::AudioParameterChoice*)p.params.getParameter("capture") = 5;
+        p.poll();
+        setParam(p, "treble", 9.0f);
+        setParam(p, "postDelayK0", 350.0f);
+        setParam(p, "eqK2", -4.0f);
+        CHECK(p.savePreset("Test / Lead"), "preset not saved");
+        const auto files = p.listPresets();
+        CHECK(files.size() == 1, "preset files: " << files.size());
+        setParam(p, "treble", 2.0f);
+        setParam(p, "postDelayK0", 900.0f);
+        setParam(p, "eqK2", 0.0f);
+        *(juce::AudioParameterChoice*)p.params.getParameter("capture") = 1;
+        p.poll();
+        CHECK(files.size() == 1 && p.loadPreset(files[0]), "preset not loaded");
+        CHECK(((juce::AudioParameterChoice*)p.params.getParameter("capture"))->getIndex() == 5, "preset capture not restored");
+        CHECK(std::abs(p.params.getRawParameterValue("treble")->load() - 9.0f) < 1e-4f, "preset knob not restored");
+        CHECK(std::abs(p.params.getRawParameterValue("postDelayK0")->load() - 350.0f) < 1.0f, "preset delay time not restored");
+        CHECK(std::abs(p.params.getRawParameterValue("eqK2")->load() + 4.0f) < 1e-3f, "preset eq not restored");
+        CHECK(p.getLibraryDir() == lib, "preset changed the library folder");
+        CHECK(p.currentPreset == files[0].getFileNameWithoutExtension(), "current preset: " << p.currentPreset);
+        std::cout << "presets: saved and restored " << files[0].getFileName() << "\n";
+        dir.deleteRecursively();
+    }
+
     // 5. Optional: editor snapshots, mjr-test <lib> <DI> <out dir>
     if (argc > 3)
     {
