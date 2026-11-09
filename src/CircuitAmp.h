@@ -277,9 +277,11 @@ public:
         brightMix.set(1, 470e3 * 500e-12, 2, 470e3 * 500e-12, fs);
         toneStack.setRate(fs);
         toneStack.reset();
-        v2bCoupling.highPass(7, fs);
-        driverCoupling.highPass(7, fs);
-        otLow1.highPass(35, fs), otLow2.highPass(35, fs), otHigh.lowPass(9000, fs);
+        // Loop poles (low end): .047 into the bootstrapped driver grid ~0.7 Hz, the OT primary inductance ~6 Hz,
+        // and the dominant one, .047 into the 68k bias feeds of the KT88s (~50 Hz) - feedback flattens it.
+        v2bCoupling.highPass(0.7, fs);
+        driverCoupling.highPass(50, fs);
+        otLow.highPass(6, fs), otHigh.lowPass(9000, fs);
         presenceRate = fs;
         lastPresence = -1;
         sagEnv = 0, sagDecay = (float)std::exp(-1.0 / (0.08 * fs));
@@ -340,16 +342,16 @@ private:
         const float shaped = u / std::pow(1.0f + std::pow(std::abs(u), 3.5f), 1.0f / 3.5f);
         const float out = (85.0f * (1.0f - 0.06f * sagEnv)) * shaped;
         sagEnv = std::max(std::abs(shaped), sagEnv * sagDecay);
-        speaker = otHigh(otLow2(otLow1(out)));
+        speaker = otHigh(otLow(out));
         return speaker * outputScale;
     }
 
     juce::dsp::Oversampling<float> os { 1, 2, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true };
     circuit::TriodeStage v1Normal, v1Bright, v2a, v2b;
-    circuit::OnePole brightCoupling, brightCathode, normalCoupling, brightMix, v2bCoupling, driverCoupling, otLow1, otLow2, otHigh, presenceShelf;
+    circuit::OnePole brightCoupling, brightCathode, normalCoupling, brightMix, v2bCoupling, driverCoupling, otLow, otHigh, presenceShelf;
     circuit::ToneStack toneStack;
     float gain1 = 0, gain2 = 0, lastPresence = -1, speaker = 0, sagEnv = 0, sagDecay = 1;
     double presenceRate = 192000;
-    // 16R tap -> 47k -> 470R: the drawing's feedback divider. ponytail: driver gain is an estimate.
-    static constexpr float beta = 470.0f / 47470.0f, driverGain = 8.0f;
+    // 16R tap -> 47k -> 470R: the drawing's feedback divider. Driver: cathodyne, gain ~1 per side.
+    static constexpr float beta = 470.0f / 47470.0f, driverGain = 1.0f;
 };

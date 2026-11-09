@@ -97,6 +97,82 @@ int main(int argc, char** argv)
         CHECK(gainAt(.5f, .5f, 1, 700).second > 1.4 * gainAt(.5f, .5f, 0, 700).second, "middle raises mids");
     }
 
+    // C2. Circuit model, whole amp: sines through it, level and distortion (residual after the fundamental).
+    {
+        struct Result { double rms, thd, crest; };
+        auto measure = [](float vol1, float vol2, CircuitAmp::Jack j, int period, float amp, float presence = 5,
+                          float treble = 5)
+        {
+            CircuitAmp a;
+            const int n = period * 400;
+            a.prepare(48000, n);
+            a.setControls(presence, 5, 5, treble, vol1, vol2, j);
+            std::vector<float> x((size_t)n);
+            for (int pass = 0; pass < 2; ++pass) // the first pass settles the coupling caps
+            {
+                for (int i = 0; i < n; ++i)
+                    x[(size_t)i] = amp * (float)std::sin(2 * juce::MathConstants<double>::pi * i / period);
+                a.process(x.data(), n);
+            }
+            double s = 0, c = 0, all = 0, peak = 0;
+            for (int i = 0; i < n; ++i)
+            {
+                const double w = 2 * juce::MathConstants<double>::pi * i / period, v = x[(size_t)i];
+                if (!std::isfinite(v))
+                    return Result { -1, -1, -1 };
+                s += v * std::sin(w), c += v * std::cos(w), all += v * v, peak = std::max(peak, std::abs(v));
+            }
+            const double a1 = 2.0 / n * std::sqrt(s * s + c * c), fund = a1 * a1 / 2, power = all / n;
+            return Result { std::sqrt(power), std::sqrt(std::max(0.0, power - fund) / fund), peak / std::sqrt(power) };
+        };
+        using J = CircuitAmp::Jack;
+        double lastThd = -1, lastCrest = 10;
+        for (float v : { 1.0f, 3.0f, 5.0f, 7.0f, 10.0f })
+        {
+            const auto r = measure(v, 0, J::one, 220, 0.3f);
+            std::cout << "circuit vol I " << v << ": rms " << r.rms << ", thd " << r.thd * 100 << "%, crest " << r.crest << "\n";
+            CHECK(r.rms > 0, "circuit output finite at vol " << v);
+            // Residual THD tops out once the wave squares off; past that, it is the crest factor that keeps falling.
+            CHECK(r.thd >= lastThd * 0.95 || r.crest <= lastCrest * 1.02, "distortion grows with volume (" << v << ")");
+            lastThd = r.thd, lastCrest = r.crest;
+        }
+        // No self-oscillation anywhere on the panel: an impulse dies out.
+        for (float k : { 0.0f, 10.0f })
+            for (float pr : { 0.0f, 10.0f })
+                for (J j : { J::one, J::two, J::jumped })
+                {
+                    CircuitAmp a;
+                    const int n = 48000;
+                    a.prepare(48000, n);
+                    a.setControls(pr, k, k, k, 10, 10, j);
+                    std::vector<float> x((size_t)n, 0.0f);
+                    x[0] = 0.5f;
+                    a.process(x.data(), n);
+                    for (int pass = 0; pass < 4; ++pass) // 4 s of silence
+                        std::fill(x.begin(), x.end(), 0.0f), a.process(x.data(), n);
+                    float tail = 0;
+                    for (float v : x)
+                        tail = std::max(tail, std::abs(v));
+                    CHECK(tail < 1e-4f, "circuit stable at tone " << k << ", presence " << pr << ", jack " << (int)j << " (" << tail << ")");
+                }
+        // Small signal so the stages stay linear: highs relative to lows.
+        auto tilt = [&](float vol1, float vol2, J j, float presence = 5)
+        { return measure(vol1, vol2, j, 16, 0.01f, presence).rms / measure(vol1, vol2, j, 240, 0.01f, presence).rms; };
+        const double t1 = tilt(3, 0, J::one), t2 = tilt(0, 3, J::two);
+        std::cout << "circuit 3 kHz/200 Hz: ch I " << t1 << ", ch II " << t2 << "\n";
+        CHECK(t1 > 1.2 * t2, "channel I brighter than II");
+        CHECK(measure(3, 3, J::jumped, 220, 0.01f).rms > 1.2 * measure(3, 0, J::one, 220, 0.01f).rms,
+              "jumped louder than I alone");
+        double lastP = 0;
+        for (float p : { 0.0f, 5.0f, 10.0f })
+        {
+            const double t = tilt(3, 0, J::one, p);
+            std::cout << "circuit presence " << p << ": 3 kHz/200 Hz " << t << "\n";
+            CHECK(t > lastP, "presence raises highs (" << p << ")");
+            lastP = t;
+        }
+    }
+
     // 0. Benchmark (informative, machine dependent): seconds of audio per second of CPU, block 128.
     {
         auto bench = [&](const char* label, double sr, bool irs, bool allFx)
@@ -124,6 +200,21 @@ int main(int argc, char** argv)
             const double cpu = juce::Time::highResolutionTicksToSeconds(juce::Time::getHighResolutionTicks() - t0);
             std::cout << "bench " << label << ": " << juce::String(10.0 / cpu, 1) << "x real time\n";
         };
+        {
+            CircuitAmp a;
+            a.prepare(48000, 128);
+            a.setControls(5, 5, 5, 5, 7, 0, CircuitAmp::Jack::one);
+            std::vector<float> x((size_t)di.getNumSamples());
+            const auto t0 = juce::Time::getHighResolutionTicks();
+            for (int i = 0; i < 10; ++i)
+            {
+                std::copy(di.getReadPointer(0), di.getReadPointer(0) + x.size(), x.begin());
+                for (size_t pos = 0; pos < x.size(); pos += 128)
+                    a.process(x.data() + pos, (int)std::min<size_t>(128, x.size() - pos));
+            }
+            const double cpu = juce::Time::highResolutionTicksToSeconds(juce::Time::getHighResolutionTicks() - t0);
+            std::cout << "bench circuit amp   : " << juce::String(10.0 * (double)x.size() / 48000 / cpu, 1) << "x real time\n";
+        }
         bench("amp only      ", 48000, false, false);
         bench("amp + cab     ", 48000, true, false);
         bench("full chain    ", 48000, true, true);
