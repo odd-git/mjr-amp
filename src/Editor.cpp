@@ -327,23 +327,24 @@ struct ChannelSwitch : juce::ToggleButton
 // Effect pedal drawn as a stompbox: knobs, name, LED, footswitch. Click toggles the module on/off.
 struct Pedal : juce::ToggleButton
 {
-    Pedal(MJRAmpProcessor& p, const FxInfo& fx, juce::Colour c)
-        : juce::ToggleButton(fx.name), proc(p), colour(c), placeholder(fx.placeholder()), nam(std::string_view(fx.id) == "drive"),
-          attachment(p.params, juce::String(fx.id) + "On", *this)
+    Pedal(MJRAmpProcessor& p, int fxIndex, juce::Colour c)
+        : juce::ToggleButton(fxChain[fxIndex].name), proc(p), colour(c), index(fxIndex), nam(p.namPedalFor(fxIndex)),
+          attachment(p.params, juce::String(fxChain[fxIndex].id) + "On", *this)
     {
         auto& params = p.params;
-        setTooltip(placeholder ? juce::String(fx.name) + " (placeholder: audio passes through)" : juce::String(fx.name));
-        if (nam) // captures folder of the real pedal
+        const auto& fx = fxChain[fxIndex];
+        setTooltip(fx.name);
+        if (nam != nullptr) // captures folder of the real pedal
         {
             folder.setButtonText("...");
             folder.setTooltip("Folder with the pedal's NAM captures");
             folder.onClick = [this]
             {
-                chooser = std::make_unique<juce::FileChooser>("Pedal captures folder", proc.drivePedal.getFolder());
+                chooser = std::make_unique<juce::FileChooser>("Pedal captures folder", nam->getFolder());
                 chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories, [this](const juce::FileChooser& fc)
                 {
                     if (fc.getResult() != juce::File())
-                        proc.setDriveFolder(fc.getResult());
+                        proc.setPedalFolder(index, fc.getResult());
                 });
             };
             addAndMakeVisible(folder);
@@ -363,10 +364,10 @@ struct Pedal : juce::ToggleButton
     }
     juce::String getTooltip() override
     {
-        if (!nam)
+        if (nam == nullptr)
             return juce::ToggleButton::getTooltip();
-        const auto shot = proc.drivePedal.currentName();
-        return shot.isEmpty() ? "Drive: no NAM captures found, pick their folder with ..." : "Drive, nearest capture: " + shot;
+        const auto shot = nam->currentName();
+        return getName() + (shot.isEmpty() ? ": no NAM captures found, pick their folder with ..." : ", nearest capture: " + shot);
     }
     bool light() const { return colour.getPerceivedBrightness() > 0.55f; }
     juce::Colour ink() const { return light() ? juce::Colour(0xff2a2e35) : juce::Colours::white.withAlpha(0.92f); }
@@ -404,12 +405,6 @@ struct Pedal : juce::ToggleButton
         g.setFont(juce::FontOptions(28.0f, juce::Font::bold));
         const auto nameArea = f.withTrimmedTop(f.getHeight() - 158).removeFromTop(36).reduced(8, 0);
         g.drawFittedText(getName().toLowerCase(), nameArea.toNearestInt(), juce::Justification::centred, 1, 0.6f);
-        if (placeholder)
-        {
-            g.setColour(ink().withAlpha(0.5f));
-            g.setFont(juce::FontOptions(11.0f));
-            g.drawText("placeholder", nameArea.translated(0, 30).withHeight(14), juce::Justification::centred);
-        }
 
         const bool on = getToggleState();
         const auto led = juce::Rectangle<float>(9, 9).withCentre({ f.getCentreX(), f.getBottom() - 92 });
@@ -438,7 +433,8 @@ struct Pedal : juce::ToggleButton
     }
     MJRAmpProcessor& proc;
     juce::Colour colour;
-    bool placeholder, nam;
+    int index;
+    NamPedal* nam;
     juce::TextButton folder;
     std::unique_ptr<juce::FileChooser> chooser;
     juce::OwnedArray<LabeledKnob> knobs;
@@ -558,7 +554,7 @@ public:
     FxPage(MJRAmpProcessor& p, FxStage stage, juce::String from, juce::String to)
         : source(std::move(from)), destination(std::move(to))
     {
-        const juce::Colour palette[] = { juce::Colour(0xffaab6c4), juce::Colour(0xff6f7d8f), juce::Colour(0xff4c5a73), juce::Colour(0xff2f6a64),
+        const juce::Colour palette[] = { juce::Colour(0xffaab6c4), juce::Colour(0xff1d1e21), juce::Colour(0xff4c5a73), juce::Colour(0xff2f6a64),
                                          juce::Colour(0xffd5dbde), juce::Colour(0xff9a8c78), juce::Colour(0xff7a4f5a), juce::Colour(0xff8c9a82),
                                          juce::Colour(0xff2c2d30), juce::Colour(0xff5e6f88) };
         for (int i = 0; i < numFx; ++i)
@@ -567,7 +563,7 @@ public:
                 if (std::string_view(fxChain[i].id) == "eq")
                     addAndMakeVisible(*(rack = std::make_unique<GraphicEq>(p, fxChain[i])));
                 else
-                    addAndMakeVisible(*pedals.add(new Pedal(p, fxChain[i], palette[i % 10])));
+                    addAndMakeVisible(*pedals.add(new Pedal(p, i, palette[i % 10])));
             }
     }
 

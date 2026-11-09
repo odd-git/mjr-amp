@@ -8,9 +8,9 @@ juce::File rememberedLibraryFile()
 {
     return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory).getChildFile("MJR Amp/library.txt");
 }
-juce::File rememberedDriveFile()
+juce::File rememberedPedalFile(int fx) // "drive.txt", "boost.txt"
 {
-    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory).getChildFile("MJR Amp/drive.txt");
+    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory).getChildFile("MJR Amp/" + juce::String(fxChain[fx].id) + ".txt");
 }
 constexpr int driveFx = 2, eqFx = 4; // fxChain indices of our own DSP: NAM drive pedal, graphic EQ
 
@@ -23,7 +23,8 @@ float tapeDelayTime(float ms, double sr)
     const double speed = 88200.0 * cycleEnd / (sr * ms * 0.001);
     return (float)std::pow(juce::jlimit(0.0, 1.0, (speed - 1.0) / 25.0), 0.25);
 }
-static_assert(std::string_view(fxChain[driveFx].id) == "drive" && std::string_view(fxChain[eqFx].id) == "eq");
+static_assert(std::string_view(fxChain[driveFx].id) == "drive" && std::string_view(fxChain[eqFx].id) == "eq"
+              && std::string_view(fxChain[MJRAmpProcessor::namFx[0]].id) == "boost" && MJRAmpProcessor::namFx[1] == driveFx);
 
 std::vector<Capture> parseCaptures()
 {
@@ -157,17 +158,20 @@ MJRAmpProcessor::MJRAmpProcessor()
     auto remembered = rememberedLibraryFile().loadFileAsString().trim();
     setLibraryDir(remembered.isNotEmpty() ? juce::File(remembered)
                                           : juce::File::getSpecialLocation(juce::File::userMusicDirectory).getChildFile("MJR Amp"));
-    const auto drive = rememberedDriveFile().loadFileAsString().trim();
-    setDriveFolder(drive.isNotEmpty() ? juce::File(drive)
-                                      : juce::File::getSpecialLocation(juce::File::userMusicDirectory)
-                                            .getChildFile("Music Production/NAM Profile/Pedals/Ibanez TS9 Tube Screamer"));
+    const auto pedals = juce::File::getSpecialLocation(juce::File::userMusicDirectory).getChildFile("Music Production/NAM Profile/Pedals");
+    for (int fx : namFx)
+    {
+        const auto remembered = rememberedPedalFile(fx).loadFileAsString().trim();
+        const char* fallback = fx == driveFx ? "Ibanez TS9 Tube Screamer" : "Fortin 33";
+        setPedalFolder(fx, remembered.isNotEmpty() ? juce::File(remembered) : pedals.getChildFile(fallback));
+    }
     startTimerHz(20);
 }
 
-void MJRAmpProcessor::setDriveFolder(const juce::File& dir)
+void MJRAmpProcessor::setPedalFolder(int fx, const juce::File& dir)
 {
-    if (drivePedal.setFolder(dir) > 0)
-        rememberedDriveFile().create(), rememberedDriveFile().replaceWithText(dir.getFullPathName());
+    if (auto* pedal = namPedalFor(fx); pedal != nullptr && pedal->setFolder(dir) > 0)
+        rememberedPedalFile(fx).create(), rememberedPedalFile(fx).replaceWithText(dir.getFullPathName());
 }
 
 MJRAmpProcessor::~MJRAmpProcessor() { stopTimer(); }
@@ -204,8 +208,11 @@ void MJRAmpProcessor::poll()
     if (idx != loadedCapture)
         loadCapture(idx, true);
     engine.collectGarbage();
-    auto k = [this](int i) { return fxKnob[driveFx][(size_t)i]->load() * 10.0f; };
-    drivePedal.update(k(0), k(1), k(2));
+    for (size_t p = 0; p < namPedals.size(); ++p)
+    {
+        const auto k = pedalKnobs(namFx[p]);
+        namPedals[p].update(k[0], k[1], k[2]);
+    }
 }
 
 void MJRAmpProcessor::loadCapture(int idx, bool resetKnobs)
@@ -239,9 +246,10 @@ void MJRAmpProcessor::prepareToPlay(double sr, int maxBlock)
 {
     sampleRate = sr;
     engine.prepare(sr, maxBlock);
-    drivePedal.prepare(sr, maxBlock);
+    for (auto& pedal : namPedals)
+        pedal.prepare(sr, maxBlock);
     // ponytail: the drive's resampler latency (host rate != 48k) is reported even when the pedal is off.
-    setLatencySamples(engine.getLatency() + drivePedal.getLatency());
+    setLatencySamples(engine.getLatency() + namPedals[0].getLatency() + namPedals[1].getLatency());
 
     driveGain.reset(sr, 0.02);
     outGain.reset(sr, 0.02);
@@ -439,15 +447,15 @@ void MJRAmpProcessor::runFx(FxStage stage, juce::AudioBuffer<float>& buffer, int
                     graphicEq[b].process(ctx);
             continue;
         }
-        if (i == (size_t)driveFx)
+        if (auto* pedal = namPedalFor((int)i))
         {
-            auto k = [&](size_t j) { return fxKnob[i][j]->load() * 10.0f; };
-            drivePedal.process(buffer.getWritePointer(0), n, k(0), k(1), k(2));
+            const auto k = pedalKnobs((int)i);
+            pedal->process(buffer.getWritePointer(0), n, k[0], k[1], k[2]);
             continue;
         }
         auto* effect = fx[i].get();
         if (effect == nullptr)
-            continue; // ponytail: the Octaver has no DSP yet (pitch shifter, e.g. signalsmith-stretch)
+            continue;
         float gainDb = 0; // our dB knobs (e.g. the compressor's makeup) act after the effect
         for (int k = 0; k < fxChain[i].numKnobs(); ++k)
         {
@@ -471,6 +479,15 @@ void MJRAmpProcessor::runFx(FxStage stage, juce::AudioBuffer<float>& buffer, int
             fxGain[i] = g;
         }
     }
+}
+
+// A NAM pedal's knobs on its own 0..10 scale; knobs it doesn't have read 0.
+std::array<float, 3> MJRAmpProcessor::pedalKnobs(int fx) const
+{
+    std::array<float, 3> k {};
+    for (int j = 0; j < std::min(3, fxChain[fx].numKnobs()); ++j)
+        k[(size_t)j] = fxKnob[(size_t)fx][(size_t)j]->load() * 10.0f;
+    return k;
 }
 
 void MJRAmpProcessor::updateGraphicEq()
@@ -564,7 +581,8 @@ juce::ValueTree MJRAmpProcessor::makeState(bool withFolders)
     if (withFolders)
     {
         state.setProperty("libraryDir", libraryDir.getFullPathName(), nullptr);
-        state.setProperty("driveDir", drivePedal.getFolder().getFullPathName(), nullptr);
+        for (int fx : namFx)
+            state.setProperty(juce::String(fxChain[fx].id) + "Dir", namPedalFor(fx)->getFolder().getFullPathName(), nullptr);
         state.setProperty("preset", currentPreset, nullptr);
     }
     for (int s = 0; s < numIrSlots; ++s)
@@ -583,8 +601,9 @@ void MJRAmpProcessor::applyState(const juce::ValueTree& state)
             f = libraryDir.getChildFile(f.getFileName());
         setIrFile(s, f);
     }
-    if (const auto drive = state.getProperty("driveDir").toString(); drive.isNotEmpty())
-        setDriveFolder(juce::File(drive));
+    for (int fx : namFx)
+        if (const auto dir = state.getProperty(juce::String(fxChain[fx].id) + "Dir").toString(); dir.isNotEmpty())
+            setPedalFolder(fx, juce::File(dir));
     if (const auto dir = state.getProperty("libraryDir").toString(); dir.isNotEmpty())
         setLibraryDir(juce::File(dir));
     if (state.hasProperty("preset"))

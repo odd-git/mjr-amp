@@ -288,7 +288,6 @@ int main(int argc, char** argv)
     }
 
     // 9. Effects: each one, switched on alone, changes the sound but keeps it finite and sane;
-    //    the Octaver (placeholder) leaves it bit-identical.
     {
         auto render = [&](const char* fxId)
         {
@@ -320,6 +319,17 @@ int main(int argc, char** argv)
                 ts.update(9.5f, 9, 7);
                 CHECK(ts.currentName().endsWith("Drive 10 Tone 9 Level 7"), "drive 9.5/9/7 picked " << ts.currentName());
                 std::cout << "drive pedal: nearest-capture choice ok\n";
+            }
+            NamPedal boost; // one knob, captures named by percent; the level follows their loudness in between
+            if (boost.setFolder(juce::File::getSpecialLocation(juce::File::userMusicDirectory)
+                                    .getChildFile("Music Production/NAM Profile/Pedals/Fortin 33")) > 0)
+            {
+                boost.update(6.5f, 0, 0);
+                CHECK(boost.currentName().endsWith("65%") && std::abs(boost.outputDb()) < 1e-4f, "boost 6.5: " << boost.currentName() << " " << boost.outputDb());
+                boost.update(7.2f, 0, 0); // nearer 65% than 80%, and 0.7/1.5 of the way to 80%'s loudness
+                CHECK(boost.currentName().endsWith("65%") && boost.outputDb() > 1.0f && boost.outputDb() < 2.5f,
+                      "boost 7.2: " << boost.currentName() << " " << boost.outputDb() << " dB");
+                std::cout << "boost pedal: 7.2 -> " << boost.currentName() << " " << boost.outputDb() << " dB\n";
             }
         }
         const auto off = render(nullptr);
@@ -358,13 +368,8 @@ int main(int argc, char** argv)
             const float rms = on.getRMSLevel(1, 0, 48000);
             std::cout << "fx " << fx.id << ": max diff " << diff << ", rms " << rms << " (off " << offRms << ")\n";
             CHECK(finite, fx.id << " produced NaN/inf");
-            if (fx.placeholder())
-                CHECK(diff < 1e-6f, fx.id << " placeholder changed the audio");
-            else
-            {
-                CHECK(diff > 1e-4f, fx.id << " does nothing");
-                CHECK(rms > offRms * 0.1f && rms < offRms * 10.0f, fx.id << " level out of range: " << rms);
-            }
+            CHECK(diff > 1e-4f, fx.id << " does nothing");
+            CHECK(rms > offRms * 0.1f && rms < offRms * 10.0f, fx.id << " level out of range: " << rms);
         }
     }
 

@@ -38,9 +38,8 @@ struct FxInfo
     const char* id;
     const char* name;
     FxStage stage;
-    AudioEffect* (*create)(void*); // nullptr: our own DSP (drive, eq) or a placeholder (audio passes through)
+    AudioEffect* (*create)(void*); // nullptr: our own DSP (NAM pedals, graphic EQ)
     std::array<FxKnob, maxFxKnobs> knobs; // unused entries have a null name
-    bool placeholder() const { return create == nullptr && std::string_view(id) != "drive" && std::string_view(id) != "eq"; }
     int numKnobs() const
     {
         int n = 0;
@@ -55,8 +54,8 @@ inline constexpr FxKnob eqBand(const char* name) { return { name, 0.0f, FxUnit::
 inline constexpr FxKnob delayKnobs[6] = { { "TIME", 500.0f, FxUnit::ms, 80.0f, 1800.0f }, { "REPEATS", 0.4f }, { "TONE", 0.5f }, { "RESO", 0.0f }, { "FLUTTER", 0.1f }, { "MIX", 0.25f } };
 inline constexpr FxInfo fxChain[] = {
     { "comp", "Compressor", FxStage::pre, mjr_create_Dynamics3, { { { "THRESHOLD", 0.6f }, { "ATTACK", 0.382f }, { "RELEASE", 0.618f }, { "MIX", 1.0f }, { "LEVEL", 0.0f, FxUnit::db, -12.0f, 18.0f } } } },
-    { "octaver", "Octaver", FxStage::pre, nullptr, {} },
-    // Drive: NAM captures of a real pedal (MJRAmpProcessor::drivePedal), knobs 0..10 like the pedal's.
+    // Boost and Drive: NAM captures of real pedals (MJRAmpProcessor::namPedals), knobs 0..10 like the pedals'.
+    { "boost", "Boost", FxStage::pre, nullptr, { { { "BOOST", 0.65f } } } },
     { "drive", "Drive", FxStage::pre, nullptr, { { { "DRIVE", 0.7f }, { "TONE", 0.7f }, { "LEVEL", 0.7f } } } },
     { "preDelay", "Delay", FxStage::pre, mjr_create_TapeDelay2, { delayKnobs[0], delayKnobs[1], delayKnobs[2], delayKnobs[3], delayKnobs[4], delayKnobs[5] } },
     // EQ: our own 9-band graphic EQ (MJRAmpProcessor::graphicEq).
@@ -111,8 +110,19 @@ public:
     juce::File getIrFile(int slot) const { return irFiles[(size_t)slot]; }
     void poll(); // applies capture changes; called by the timer
     void resetKnobsToCapture(); // knobs back to the active capture's recorded settings
-    bool isIdle() const { return engine.isIdle() && drivePedal.isIdle(); }
-    void setDriveFolder(const juce::File&);
+    bool isIdle() const { return engine.isIdle() && namPedals[0].isIdle() && namPedals[1].isIdle(); }
+
+    // NAM pedals, by fxChain index: Boost (one knob, captures named "... 65%") and Drive ("Drive 7 Tone 7 Level 9").
+    static constexpr int namFx[2] = { 1, 2 };
+    std::array<NamPedal, 2> namPedals; // the editor reads their folders and current captures
+    NamPedal* namPedalFor(int fx)
+    {
+        for (size_t i = 0; i < 2; ++i)
+            if (namFx[i] == fx)
+                return &namPedals[i];
+        return nullptr;
+    }
+    void setPedalFolder(int fx, const juce::File&); // remembered for the next start
 
     // User presets: the tone (capture, knobs, effects, IRs) as XML files, without this machine's folders.
     juce::File presetDir = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory).getChildFile("MJR Amp/Presets");
@@ -120,7 +130,6 @@ public:
     bool savePreset(const juce::String& name); // overwrites a preset with the same name
     bool loadPreset(const juce::File&);
     juce::String currentPreset; // shown in the editor; kept in the session
-    NamPedal drivePedal; // the editor reads its folder and current capture
 
     std::vector<Capture> captures; // before params: the parameter layout is built from it
     juce::AudioProcessorValueTreeState params;
@@ -141,6 +150,7 @@ private:
     void applyState(const juce::ValueTree&);
     void updateFilters();
     void updateGraphicEq();
+    std::array<float, 3> pedalKnobs(int fx) const;
 
     NamEngine engine;
     juce::File libraryDir;
