@@ -208,6 +208,26 @@ int main(int argc, char** argv)
     const auto measureB = battery("circuit B", [] { return CircuitAmpFull(CircuitAmpFull::as1967); });
     const auto measureC = battery("circuit C", [] { return CircuitAmpFull(CircuitAmpFull::lead1968); });
     {
+        // Switching A -> B -> C must not jump in level: the DI through each at the same knobs.
+        auto level = [&](auto&& a)
+        {
+            a.prepare(48000, 256);
+            a.setControls(5, 5, 5, 5, 6, 5, CircuitAmp::Jack::one);
+            std::vector<float> x((size_t)di.getNumSamples());
+            std::copy(di.getReadPointer(0), di.getReadPointer(0) + x.size(), x.begin());
+            for (size_t pos = 0; pos < x.size(); pos += 256)
+                a.process(x.data() + pos, (int)std::min<size_t>(256, x.size() - pos));
+            double e = 0;
+            for (float v : x)
+                e += (double)v * v;
+            return juce::Decibels::gainToDecibels(std::sqrt(e / (double)x.size()));
+        };
+        const double la = level(CircuitAmp()), lb = level(CircuitAmpFull(CircuitAmpFull::as1967)),
+                     lc = level(CircuitAmpFull(CircuitAmpFull::lead1968));
+        std::cout << "circuit levels A/B/C: " << la << " / " << lb << " / " << lc << " dB\n";
+        CHECK(std::abs(lb - la) < 3 && std::abs(lc - la) < 3, "circuit B/C level matches A");
+    }
+    {
         // B: quiescent voltages against the 200 W service sheet (V1 plate 170 V, cathode 1.4 V).
         CircuitAmpFull b(CircuitAmpFull::as1967);
         b.prepare(48000, 256);

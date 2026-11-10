@@ -1416,6 +1416,22 @@ public:
                 prm->setValueNotifyingHost(prm->convertTo0to1(b == &captureButton ? 1.0f : 0.0f));
             };
         }
+        const char* modelTips[] = { "Amp A: clean voicing", "Amp B: the 1967 circuit, as drawn",
+                                    "Amp C: 1967 with the 1968 lead mods (100k feedback, -70 V bias, hotter input)" };
+        for (int i = 0; i < 3; ++i)
+        {
+            auto& b = modelButtons[(size_t)i];
+            b.setButtonText(juce::String::charToString((juce::juce_wchar)('A' + i)));
+            b.setTooltip(modelTips[i]);
+            b.setRadioGroupId(3);
+            b.setClickingTogglesState(true);
+            b.onClick = [this, i]
+            {
+                auto* prm = p.params.getParameter("circuit");
+                prm->setValueNotifyingHost(prm->convertTo0to1((float)i));
+            };
+            content.addChildComponent(b);
+        }
         circuitButton.setButtonText("CIRCUIT");
         circuitButton.setTooltip("Circuit model of the amp: the knobs act as on the real panel");
         captureButton.setButtonText("CAPTURE");
@@ -1548,6 +1564,8 @@ private:
 
         circuitButton.setBounds(586, 122, 100, 24); // where the CAPTURE heading was: the buttons name the section
         captureButton.setBounds(686, 122, 100, 24);
+        for (int i = 0; i < 3; ++i) // circuit A / B / C, in the capture menu's place
+            modelButtons[(size_t)i].setBounds(611 + 50 * i, 88, 50, 30);
         prevCapture.setBounds(468, 88, 32, 34);
         capture.setBounds(506, 88, 360, 34);
         nextCapture.setBounds(872, 88, 32, 34);
@@ -1580,6 +1598,7 @@ private:
         return (c.channel == "I" ? "I" : "I+II") + juce::String("   ") + c.level + "   " + c.voicing + (c.pedal.isEmpty() ? "" : "   + " + c.pedal);
     }
     int captureIndex() const { return ((juce::AudioParameterChoice*)p.params.getParameter("capture"))->getIndex(); }
+    int modelIndex() const { return ((juce::AudioParameterChoice*)p.params.getParameter("circuit"))->getIndex(); }
     int jackIndex() const { return ((juce::AudioParameterChoice*)p.params.getParameter("jack"))->getIndex(); }
 
     void selectCapture(int idx)
@@ -1601,6 +1620,9 @@ private:
     {
         const bool circuit = shownCircuit = p.circuitMode();
         shownJack = jackIndex();
+        shownModel = modelIndex();
+        for (int i = 0; i < 3; ++i)
+            modelButtons[(size_t)i].setVisible(circuit), modelButtons[(size_t)i].setToggleState(i == shownModel, juce::dontSendNotification);
         (circuit ? circuitButton : captureButton).setToggleState(true, juce::dontSendNotification);
         for (juce::Component* c : { (juce::Component*)&prevCapture, (juce::Component*)&capture, (juce::Component*)&nextCapture,
                                     (juce::Component*)&resetKnobs })
@@ -1626,7 +1648,8 @@ private:
         if (circuit)
         {
             const char* inputs[] = { "input I (bright)", "input II (normal)", "input I jumped to II" };
-            captured.setText(juce::String("Circuit model of the 200 W head  -  ") + inputs[shownJack] + "  -  click the input jacks to change",
+            const char* models[] = { "Amp A, clean voicing", "Amp B, the 1967 circuit as drawn", "Amp C, 1967 with the 1968 lead mods" };
+            captured.setText(juce::String(models[shownModel]) + "  -  " + inputs[shownJack] + "  -  click the input jacks to change",
                              juce::dontSendNotification);
         }
     }
@@ -1683,7 +1706,7 @@ private:
     void timerCallback() override
     {
         if (captureIndex() != shownCapture || p.getLibraryDir() != shownLibrary || p.circuitMode() != shownCircuit
-            || jackIndex() != shownJack)
+            || jackIndex() != shownJack || modelIndex() != shownModel)
             refreshCapture();
         if (p.currentPreset != shownPreset) // a session or preset loaded from elsewhere
             refreshPresets();
@@ -1716,6 +1739,7 @@ private:
     std::vector<int> order;
     juce::ComboBox capture;
     juce::TextButton prevCapture, nextCapture, resetKnobs, circuitButton, captureButton;
+    std::array<juce::TextButton, 3> modelButtons;
     IconButton preNav { "PRE FX", IconButton::pedal }, ampNav { "AMP", IconButton::amp }, eqNav { "EQ", IconButton::eq },
         postNav { "POST FX", IconButton::pedal };
     FxPage prePage { p, FxStage::pre, "INPUT", "AMP" }, eqPage { p, FxStage::eq, "AMP", "CAB" },
@@ -1733,7 +1757,7 @@ private:
     PresetBox presetBox;
     juce::TextButton prevPreset, nextPreset, savePresetButton;
     juce::String shownPreset;
-    int shownCapture = -1, shownBeat = 0, shownJack = -1;
+    int shownCapture = -1, shownBeat = 0, shownJack = -1, shownModel = -1;
     bool shownCircuit = false;
     juce::File shownLibrary;
     juce::uint32 beatLit = 0;

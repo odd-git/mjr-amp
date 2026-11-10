@@ -632,8 +632,8 @@ public:
         double feedbackR, biasVolts;
         float inputGain, outputScale;
     };
-    static constexpr Design as1967 { 47e3, 82.0, 1.0f, 0.0025f };     // amp B: as drawn
-    static constexpr Design lead1968 { 100e3, 70.0, 2.0f, 0.0025f };  // amp C: the 1968 lead mods
+    static constexpr Design as1967 { 47e3, 82.0, 1.0f, 0.0013f };     // amp B: as drawn
+    static constexpr Design lead1968 { 100e3, 70.0, 2.0f, 0.0013f };  // amp C: the 1968 lead mods
 
     explicit CircuitAmpFull(Design d) : design(d) {}
 

@@ -155,7 +155,8 @@ private:
     std::array<float, 3> pedalKnobs(int fx) const;
 
     NamEngine engine;
-    CircuitAmp circuit;
+    CircuitAmp circuit; // amp A
+    CircuitAmpFull circuitB { CircuitAmpFull::as1967 }, circuitC { CircuitAmpFull::lead1968 };
     juce::File libraryDir;
     std::atomic<int> loadedCapture { -1 };
     std::array<std::atomic<float>, 6> baseline {}; // knob values the active capture was recorded with
@@ -172,7 +173,7 @@ private:
     juce::AudioBuffer<float> dry, slotBuf;
 
     std::array<std::atomic<float>*, 6> knob {};
-    std::atomic<float> *input, *output, *inputSource, *gate, *transpose, *ampOn, *ampMode, *jack, *metroOn, *bpm, *beats, *metroLevel;
+    std::atomic<float> *input, *output, *inputSource, *gate, *transpose, *ampOn, *ampMode, *jack, *circuitModel, *metroOn, *bpm, *beats, *metroLevel;
 
     void addMetronome(juce::AudioBuffer<float>&, int numOut);
     void runFx(FxStage, juce::AudioBuffer<float>&, int numChannels);

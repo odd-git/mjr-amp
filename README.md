@@ -44,6 +44,10 @@ input with the **INPUT CH** switch. Close other apps that hold the interface dir
   (`src/CircuitAmp.h`): triode stages with bias shift, the plate-driven tone stack solved exactly,
   4x KT88 ultra-linear power amp with global feedback and Presence. The knobs act as on the real
   panel. Click the input jacks to plug into I (bright), II, or I jumped to II. Needs no captures.
+  Three voicings: **A** clean (simplified model), **B** the 1967 circuit as drawn (exact volume and
+  tone networks, cathodyne and ECC82 driver pair, KT88 push-pull through the transformer, sagging
+  supply, voltages from the service sheet), **C** = B with the 1968 lead mods (100k feedback,
+  -70 V bias, hotter input).
 - **CAPTURE**: the NAM captures below.
 
 ## Capture library

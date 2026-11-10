@@ -80,6 +80,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout(const std::vector
     l.add(std::make_unique<AudioParameterBool>(ParameterID { "ampOn", 1 }, "Amp On", true));
     l.add(std::make_unique<AudioParameterChoice>(ParameterID { "ampMode", 1 }, "Amp Model", StringArray { "Circuit", "Capture" }, 0));
     l.add(std::make_unique<AudioParameterChoice>(ParameterID { "jack", 1 }, "Input Jack", StringArray { "I", "II", "I+II" }, 0));
+    l.add(std::make_unique<AudioParameterChoice>(ParameterID { "circuit", 1 }, "Circuit", StringArray { "A", "B", "C" }, 0));
     l.add(db("output", "Output", -24.0f, 12.0f, 0.0f));
 
     for (int s = 1; s <= MJRAmpProcessor::numIrSlots; ++s)
@@ -141,6 +142,7 @@ MJRAmpProcessor::MJRAmpProcessor()
     ampOn = params.getRawParameterValue("ampOn");
     ampMode = params.getRawParameterValue("ampMode");
     jack = params.getRawParameterValue("jack");
+    circuitModel = params.getRawParameterValue("circuit");
     metroOn = params.getRawParameterValue("metroOn");
     for (int i = 0; i < numFx; ++i)
     {
@@ -251,11 +253,13 @@ void MJRAmpProcessor::prepareToPlay(double sr, int maxBlock)
     sampleRate = sr;
     engine.prepare(sr, maxBlock);
     circuit.prepare(sr, maxBlock);
+    circuitB.prepare(sr, maxBlock);
+    circuitC.prepare(sr, maxBlock);
     for (auto& pedal : namPedals)
         pedal.prepare(sr, maxBlock);
     // ponytail: the larger of the two amp models' latencies, and the drive's resampler latency (host rate != 48k),
     // are reported whatever is active: a host can't follow latency changes at runtime.
-    setLatencySamples(std::max(engine.getLatency(), circuit.getLatency()) + namPedals[0].getLatency() + namPedals[1].getLatency());
+    setLatencySamples(std::max({ engine.getLatency(), circuit.getLatency(), circuitB.getLatency() }) + namPedals[0].getLatency() + namPedals[1].getLatency());
 
     driveGain.reset(sr, 0.02);
     outGain.reset(sr, 0.02);
@@ -366,9 +370,19 @@ void MJRAmpProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 
     if (amp && modelled)
     {
-        circuit.setControls(knob[0]->load(), knob[1]->load(), knob[2]->load(), knob[3]->load(), knob[4]->load(),
+        auto run = [&](auto& amp)
+        {
+            amp.setControls(knob[0]->load(), knob[1]->load(), knob[2]->load(), knob[3]->load(), knob[4]->load(),
                             knob[5]->load(), (CircuitAmp::Jack)juce::roundToInt(jack->load()));
-        circuit.process(mono, n);
+            amp.process(mono, n);
+        };
+        // ponytail: hard switch between models (may click), like the amp on/off switch
+        switch (juce::roundToInt(circuitModel->load()))
+        {
+            case 1: run(circuitB); break;
+            case 2: run(circuitC); break;
+            default: run(circuit); break;
+        }
     }
     else if (amp)
         engine.process(mono, n);
