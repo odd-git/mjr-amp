@@ -2,7 +2,10 @@
 #include "../src/Processor.h"
 #include "../src/Pitch.h"
 #include "../src/CircuitAmp.h"
+#include <cstring>
 #include <iostream>
+
+constexpr std::uint64_t AMP_A_FINGERPRINT = 13822775965762470258ull; // amp A as of 9cbd6f7, frozen (x86-64 AVX2 build)
 
 static int failures = 0;
 #define CHECK(cond, msg) do { if (!(cond)) { std::cerr << "FAIL: " << msg << "\n"; ++failures; } } while (0)
@@ -97,13 +100,41 @@ int main(int argc, char** argv)
         CHECK(gainAt(.5f, .5f, 1, 700).second > 1.4 * gainAt(.5f, .5f, 0, 700).second, "middle raises mids");
     }
 
-    // C2. Circuit model, whole amp: sines through it, level and distortion (residual after the fundamental).
+    // C0. Amp A is frozen: its render of a fixed signal must not change by a single bit (FNV-1a over the samples).
     {
-        struct Result { double rms, thd, crest; };
-        auto measure = [](float vol1, float vol2, CircuitAmp::Jack j, int period, float amp, float presence = 5,
+        std::uint64_t h = 1469598103934665603ull;
+        using J = CircuitAmp::Jack;
+        for (J j : { J::one, J::two, J::jumped })
+            for (float k : { 2.0f, 5.0f, 9.0f })
+            {
+                CircuitAmp a;
+                const int n = 24000;
+                a.prepare(48000, 256);
+                a.setControls(k, 10 - k, k, 5, k, 10 - k, j);
+                std::vector<float> x((size_t)n);
+                for (int i = 0; i < n; ++i)
+                    x[(size_t)i] = 0.4f * di.getSample(0, (i + 20000) % di.getNumSamples()) + 0.05f * (float)std::sin(i * 0.031);
+                for (int pos = 0; pos < n; pos += 256)
+                    a.process(x.data() + pos, std::min(256, n - pos));
+                for (float v : x)
+                {
+                    std::uint32_t b;
+                    std::memcpy(&b, &v, 4);
+                    h = (h ^ b) * 1099511628211ull;
+                }
+            }
+        std::cout << "amp A fingerprint: " << h << "\n";
+        CHECK(h == AMP_A_FINGERPRINT, "amp A changed");
+    }
+
+    // C2. Circuit models A, B, C, whole amp: sines through it, level and distortion (residual after the fundamental).
+    struct Result { double rms, thd, crest; };
+    auto battery = [&](const char* name, auto make)
+    {
+        auto measure = [make](float vol1, float vol2, CircuitAmp::Jack j, int period, float amp, float presence = 5,
                           float treble = 5)
         {
-            CircuitAmp a;
+            auto a = make();
             const int n = period * 400;
             a.prepare(48000, n);
             a.setControls(presence, 5, 5, treble, vol1, vol2, j);
@@ -130,10 +161,10 @@ int main(int argc, char** argv)
         for (float v : { 1.0f, 3.0f, 5.0f, 7.0f, 10.0f })
         {
             const auto r = measure(v, 0, J::one, 220, 0.3f);
-            std::cout << "circuit vol I " << v << ": rms " << r.rms << ", thd " << r.thd * 100 << "%, crest " << r.crest << "\n";
-            CHECK(r.rms > 0, "circuit output finite at vol " << v);
+            std::cout << name << " vol I " << v << ": rms " << r.rms << ", thd " << r.thd * 100 << "%, crest " << r.crest << "\n";
+            CHECK(r.rms > 0, name << ": " << "circuit output finite at vol " << v);
             // Residual THD tops out once the wave squares off; past that, it is the crest factor that keeps falling.
-            CHECK(r.thd >= lastThd * 0.95 || r.crest <= lastCrest * 1.02, "distortion grows with volume (" << v << ")");
+            CHECK(r.thd >= lastThd * 0.95 || r.crest <= lastCrest * 1.02, name << ": " << "distortion grows with volume (" << v << ")");
             lastThd = r.thd, lastCrest = r.crest;
         }
         // No self-oscillation anywhere on the panel: an impulse dies out.
@@ -141,7 +172,7 @@ int main(int argc, char** argv)
             for (float pr : { 0.0f, 10.0f })
                 for (J j : { J::one, J::two, J::jumped })
                 {
-                    CircuitAmp a;
+                    auto a = make();
                     const int n = 48000;
                     a.prepare(48000, n);
                     a.setControls(pr, k, k, k, 10, 10, j);
@@ -153,23 +184,48 @@ int main(int argc, char** argv)
                     float tail = 0;
                     for (float v : x)
                         tail = std::max(tail, std::abs(v));
-                    CHECK(tail < 1e-4f, "circuit stable at tone " << k << ", presence " << pr << ", jack " << (int)j << " (" << tail << ")");
+                    CHECK(tail < 1e-4f, name << ": " << "circuit stable at tone " << k << ", presence " << pr << ", jack " << (int)j << " (" << tail << ")");
                 }
         // Small signal so the stages stay linear: highs relative to lows.
         auto tilt = [&](float vol1, float vol2, J j, float presence = 5)
         { return measure(vol1, vol2, j, 16, 0.01f, presence).rms / measure(vol1, vol2, j, 240, 0.01f, presence).rms; };
         const double t1 = tilt(3, 0, J::one), t2 = tilt(0, 3, J::two);
-        std::cout << "circuit 3 kHz/200 Hz: ch I " << t1 << ", ch II " << t2 << "\n";
-        CHECK(t1 > 1.2 * t2, "channel I brighter than II");
+        std::cout << name << " 3 kHz/200 Hz: ch I " << t1 << ", ch II " << t2 << "\n";
+        CHECK(t1 > 1.2 * t2, name << ": " << "channel I brighter than II");
         CHECK(measure(3, 3, J::jumped, 220, 0.01f).rms > 1.2 * measure(3, 0, J::one, 220, 0.01f).rms,
-              "jumped louder than I alone");
+              name << ": " << "jumped louder than I alone");
         double lastP = 0;
         for (float p : { 0.0f, 5.0f, 10.0f })
         {
             const double t = tilt(3, 0, J::one, p);
-            std::cout << "circuit presence " << p << ": 3 kHz/200 Hz " << t << "\n";
-            CHECK(t > lastP, "presence raises highs (" << p << ")");
+            std::cout << name << " presence " << p << ": 3 kHz/200 Hz " << t << "\n";
+            CHECK(t > lastP, name << ": " << "presence raises highs (" << p << ")");
             lastP = t;
+        }
+        return measure;
+    };
+    battery("circuit A", [] { return CircuitAmp(); });
+    const auto measureB = battery("circuit B", [] { return CircuitAmpFull(CircuitAmpFull::as1967); });
+    const auto measureC = battery("circuit C", [] { return CircuitAmpFull(CircuitAmpFull::lead1968); });
+    {
+        // B: quiescent voltages against the 200 W service sheet (V1 plate 170 V, cathode 1.4 V).
+        CircuitAmpFull b(CircuitAmpFull::as1967);
+        b.prepare(48000, 256);
+        std::cout << "circuit B quiescent: V1 plate " << b.v1PlateVolts() << " V, cathode " << b.v1CathodeVolts()
+                  << " V, KT88 idle " << b.kt88IdleAmps() * 1000 << " mA\n";
+        // The sheet's cathode reads 1.4 V; Koren's average 12AX7 draws less at the same plate voltage (~0.8 V): informative.
+        CHECK(std::abs(b.v1PlateVolts() - 170) < 10, "circuit B V1 plate voltage");
+        // As drawn, the two volume pots load each other: Volume II moves channel I's level when jumped.
+        using J = CircuitAmp::Jack;
+        const double lo = measureB(5, 0, J::jumped, 220, 0.01f).rms, hi = measureB(5, 10, J::jumped, 220, 0.01f).rms;
+        std::cout << "circuit B jumped, vol II 0 -> 10: " << lo << " -> " << hi << "\n";
+        CHECK(std::abs(hi / lo - 1) > 0.05, "circuit B volume network interacts");
+        // C: the lead mods distort more than B at the same settings.
+        for (float v : { 5.0f, 7.0f })
+        {
+            const auto rb = measureB(v, 0, J::one, 220, 0.1f), rc = measureC(v, 0, J::one, 220, 0.1f);
+            std::cout << "circuit B/C vol " << v << ": thd " << rb.thd * 100 << "% / " << rc.thd * 100 << "%, crest " << rb.crest << " / " << rc.crest << "\n";
+            CHECK(rc.thd > rb.thd || rc.crest < rb.crest, "circuit C distorts more than B at vol " << v);
         }
     }
 
@@ -201,8 +257,8 @@ int main(int argc, char** argv)
             const double cpu = juce::Time::highResolutionTicksToSeconds(juce::Time::getHighResolutionTicks() - t0);
             std::cout << "bench " << label << ": " << juce::String(10.0 / cpu, 1) << "x real time\n";
         };
+        auto benchCircuit = [&](const char* label, auto&& a)
         {
-            CircuitAmp a;
             a.prepare(48000, 128);
             a.setControls(5, 5, 5, 5, 7, 0, CircuitAmp::Jack::one);
             std::vector<float> x((size_t)di.getNumSamples());
@@ -214,8 +270,11 @@ int main(int argc, char** argv)
                     a.process(x.data() + pos, (int)std::min<size_t>(128, x.size() - pos));
             }
             const double cpu = juce::Time::highResolutionTicksToSeconds(juce::Time::getHighResolutionTicks() - t0);
-            std::cout << "bench circuit amp   : " << juce::String(10.0 * (double)x.size() / 48000 / cpu, 1) << "x real time\n";
-        }
+            std::cout << "bench " << label << ": " << juce::String(10.0 * (double)x.size() / 48000 / cpu, 1) << "x real time\n";
+        };
+        benchCircuit("circuit A     ", CircuitAmp());
+        benchCircuit("circuit B     ", CircuitAmpFull(CircuitAmpFull::as1967));
+        benchCircuit("circuit C     ", CircuitAmpFull(CircuitAmpFull::lead1968));
         bench("amp only      ", 48000, false, false);
         bench("amp + cab     ", 48000, true, false);
         bench("full chain    ", 48000, true, true);
