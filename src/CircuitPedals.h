@@ -18,11 +18,14 @@ class CircuitTS9
 public:
     struct Tuning
     {
-        // ponytail: datasheet values until the captures calibrate them (phase 3).
-        double inputVolts = 6.91, outputVolts = 8.71; // full scale, peak: +16 / +18 dBu
-        double diodeIs = 2.52e-9, diodeN = 1.752; // 1N914
-        double rail = 3.5;                  // 4558 swing around Vref on 9 V
-        double driveTaper = 0, levelTaper = 0; // 0 = ideal log (10% at half), 1 = linear
+        // Fitted to the nine captures (grid search, MJR_CALIBRATE=1 in the tests); the pots behave more
+        // linearly than their log markings, and the Tone knob reaches the highs sooner than a linear sweep.
+        // ponytail: the captures' output sits ~6 dB above the metadata's +18 dBu; folded into outputVolts.
+        double inputVolts = 6.91, outputVolts = 4.32; // full scale, peak: +16 dBu in
+        double diodeIs = 2.52e-9, diodeN = 1.752;      // 1N914
+        double rail = 3.5;                             // 4558 swing around Vref on 9 V
+        double driveTaper = 0.4, levelTaper = 1;       // 0 = ideal log (10% at half), 1 = linear
+        double toneCurve = 0.7;                        // exponent on the Tone knob's travel
     };
 
     CircuitTS9() = default;
@@ -57,7 +60,7 @@ public:
         if (toneMoved)
         {
             // Nodes: 0 X (+ input, and - through the op-amp), 1 wiper, 2 between 220n and 220 ohm.
-            const double t = juce::jlimit(1e-4, 1.0 - 1e-4, (double)toneK / 10.0);
+            const double t = juce::jlimit(1e-4, 1.0 - 1e-4, std::pow((double)toneK / 10.0, tune.toneCurve));
             ra = t * 20e3, rb = (1 - t) * 20e3; // X to wiper, wiper to the - input (treble up: wiper to -)
             tone.begin();
             tone.r(0, -1, 1e3), tone.r(0, -1, 10e3), tone.c(0, 0, -1, 220e-9, fs);
@@ -134,7 +137,10 @@ public:
     struct Tuning
     {
         // ponytail: datasheet values until the captures calibrate them (phase 3).
-        double inputVolts = 6.91, outputVolts = 6.91; // full scale, peak: as the TS9 (these captures lost theirs)
+        // The captures lost their absolute level, so these are chosen, not measured: a guitar DI (peak ~0.5)
+        // stays under the rails (0.5 * 2 V * 12.6 = 12.6 V swings only on hard picking), and full Level
+        // gives +20 dB digital, the anchor the boost has always had (22 dB circuit gain - 2 dB).
+        double inputVolts = 2.0, outputVolts = 2.52;
         double rail = 7.5;         // TL071 swing around VR with VC = 18 V
         double sourceOhms = 10e3;  // the guitar's pickup, resistance only: what Q1 clamps against
     };

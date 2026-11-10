@@ -372,23 +372,23 @@ int main(int argc, char** argv)
     }
 
     {
-        // Boost: the gain the schematic gives (Phase 0: +22.3 dB at 1 kHz, +3.7 dB at 100 Hz, full Level).
-        // Digital full scale is 6.91 V peak: 0.01 is 69 mV.
+        // Boost: the gain the schematic gives (+22.3 dB at 1 kHz, +3.7 dB at 100 Hz, full Level), less the 2 dB
+        // between its full scales (+20.3 / +1.7 dB digital).
         auto boost = [&](float level, int period, float amp) { return measurePedal(CircuitFortin33(), level, 0, 0, period, amp); };
         const double g1k = juce::Decibels::gainToDecibels(boost(10, 48, 0.01f).rms), g100 = juce::Decibels::gainToDecibels(boost(10, 480, 0.01f).rms);
         std::cout << "fortin33 full level: 1 kHz " << g1k << " dB, 100 Hz " << g100 << " dB\n";
-        CHECK(std::abs(g1k - 22.3) < 1 && std::abs(g100 - 3.7) < 1.5, "fortin33 gain as the schematic");
+        CHECK(std::abs(g1k - 20.3) < 1 && std::abs(g100 - 1.7) < 1.5, "fortin33 gain as the schematic");
         double last = 0;
         for (float l : { 2.0f, 5.0f, 8.0f, 10.0f })
         {
             const auto r = boost(l, 220, 0.02f);
             std::cout << "fortin33 level " << l << ": gain " << juce::Decibels::gainToDecibels(r.rms) << " dB, thd " << r.thd * 100 << "%\n";
             CHECK(r.rms > last, "fortin33 level raises the output (" << l << ")");
-            CHECK(r.thd < 0.01, "fortin33 clean at 140 mV (" << l << ")");
+            CHECK(r.thd < 0.01, "fortin33 clean at 40 mV (" << l << ")");
             last = r.rms;
         }
-        const auto hot = boost(10, 220, 0.3f);
-        std::cout << "fortin33 2 V in: thd " << hot.thd * 100 << "%, crest " << hot.crest << "\n";
+        const auto hot = boost(10, 220, 0.8f);
+        std::cout << "fortin33 1.6 V in: thd " << hot.thd * 100 << "%, crest " << hot.crest << "\n";
         CHECK(hot.rms > 0 && hot.thd > 0.02, "fortin33 saturates at the rails with a hot input");
         CircuitFortin33 p;
         p.prepare(48000, 48000);
@@ -529,22 +529,24 @@ int main(int argc, char** argv)
             const auto sc = score(caps, [] { return CircuitTS9(); }, true);
             std::cout << "ts9 vs captures: level offset " << sc.offset << " dB, spread " << sc.spread << " dB, shape " << sc.shape
                       << " dB, thd " << sc.thd << " dB\n";
+            CHECK(std::abs(sc.offset) < 1.5 && sc.spread < 2.0 && sc.shape < 1.6 && sc.thd < 3.5, "ts9 circuit matches its captures");
             if (std::getenv("MJR_CALIBRATE"))
             {
                 double best = 1e9;
-                for (double dt : { 0.0, 0.2, 0.4, 0.6, 0.8, 1.0 })
-                    for (double lt : { 0.0, 0.5, 1.0 })
-                        for (double n : { 1.5, 1.752, 2.0 })
-                        {
-                            CircuitTS9::Tuning t;
-                            t.driveTaper = dt, t.levelTaper = lt, t.diodeN = n;
-                            const auto s = score(caps, [t] { return CircuitTS9(t); }, false);
-                            const double total = s.spread + s.shape + s.thd;
-                            if (total < best)
-                                best = total, std::cout << "  calibrate: drive taper " << dt << ", level taper " << lt << ", n " << n
-                                                        << ": offset " << s.offset << ", spread " << s.spread << ", shape " << s.shape
-                                                        << ", thd " << s.thd << "\n";
-                        }
+                for (double dt : { 0.4, 0.6, 0.8 })
+                    for (double tc : { 0.7, 1.0, 1.4 })
+                        for (double rail : { 2.5, 3.5 })
+                            for (double n : { 1.5, 1.752 })
+                            {
+                                CircuitTS9::Tuning t;
+                                t.driveTaper = dt, t.levelTaper = 1, t.toneCurve = tc, t.rail = rail, t.diodeN = n;
+                                const auto s = score(caps, [t] { return CircuitTS9(t); }, false);
+                                const double total = s.spread + s.shape + s.thd;
+                                if (total < best)
+                                    best = total, std::cout << "  calibrate: drive taper " << dt << ", tone curve " << tc << ", rail " << rail
+                                                            << ", n " << n << ": offset " << s.offset << ", spread " << s.spread
+                                                            << ", shape " << s.shape << ", thd " << s.thd << "\n";
+                            }
             }
         }
         if (boostDir.isDirectory())
@@ -554,6 +556,7 @@ int main(int argc, char** argv)
             const auto sc = score(caps, [] { return CircuitFortin33(); }, true);
             std::cout << "fortin33 vs captures: level offset " << sc.offset << " dB, spread " << sc.spread << " dB, shape " << sc.shape
                       << " dB, thd " << sc.thd << " dB\n";
+            CHECK(sc.shape < 0.7, "fortin33 circuit follows the captures' response");
         }
     }
     // 0. Benchmark (informative, machine dependent): seconds of audio per second of CPU, block 128.
