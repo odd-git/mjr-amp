@@ -2,6 +2,7 @@
 #include "../src/Processor.h"
 #include "../src/Pitch.h"
 #include "../src/CircuitAmp.h"
+#include "../src/CircuitPedals.h"
 #include "../src/Shimmer.h"
 #include <cstring>
 #include <iostream>
@@ -302,6 +303,73 @@ int main(int argc, char** argv)
         }
     }
 
+    // P1. Overdrive circuit (TS9): sines through it at the pedal's knobs.
+    {
+        auto pedal = [](float drive, float tone, float level, int period, float amp)
+        {
+            CircuitTS9 p;
+            const int n = period * 400;
+            p.prepare(48000, n);
+            p.setKnobs(drive, tone, level);
+            std::vector<float> x((size_t)n);
+            for (int pass = 0; pass < 2; ++pass)
+            {
+                for (int i = 0; i < n; ++i)
+                    x[(size_t)i] = amp * (float)std::sin(2 * juce::MathConstants<double>::pi * i / period);
+                p.process(x.data(), n);
+            }
+            double s = 0, c = 0, all = 0, peak = 0;
+            for (int i = 0; i < n; ++i)
+            {
+                const double w = 2 * juce::MathConstants<double>::pi * i / period, v = x[(size_t)i];
+                if (!std::isfinite(v))
+                    return Result { -1, -1, -1 };
+                s += v * std::sin(w), c += v * std::cos(w), all += v * v, peak = std::max(peak, std::abs(v));
+            }
+            const double a1 = 2.0 / n * std::sqrt(s * s + c * c), fund = a1 * a1 / 2, power = all / n;
+            return Result { std::sqrt(power) / (amp / std::sqrt(2.0)), std::sqrt(std::max(0.0, power - fund) / fund), peak / std::sqrt(power) };
+        };
+        const double mid = pedal(0, 5, 10, 64, 0.001f).rms, low = pedal(0, 5, 10, 480, 0.001f).rms;
+        std::cout << "ts9 drive 0, level 10: gain 750 Hz " << juce::Decibels::gainToDecibels(mid) << " dB, 100 Hz "
+                  << juce::Decibels::gainToDecibels(low) << " dB\n";
+        CHECK(mid > 2 * low, "ts9 mid hump");
+        double lastThd = -1, lastCrest = 10;
+        for (float d : { 0.0f, 3.0f, 5.0f, 7.0f, 10.0f })
+        {
+            const auto r = pedal(d, 5, 5, 220, 0.1f);
+            std::cout << "ts9 drive " << d << ": gain " << juce::Decibels::gainToDecibels(r.rms) << " dB, thd " << r.thd * 100 << "%, crest " << r.crest << "\n";
+            CHECK(r.rms > 0, "ts9 finite at drive " << d);
+            CHECK(r.thd >= lastThd * 0.95 || r.crest <= lastCrest * 1.02, "ts9 distortion grows with drive (" << d << ")");
+            lastThd = r.thd, lastCrest = r.crest;
+        }
+        auto tilt = [&](float tone, float level) { return pedal(0, tone, level, 16, 0.001f).rms / pedal(0, tone, level, 240, 0.001f).rms; };
+        double lastT = 0;
+        for (float t : { 0.0f, 5.0f, 10.0f })
+        {
+            const double v = tilt(t, 5);
+            std::cout << "ts9 tone " << t << ": 3 kHz/200 Hz " << v << "\n";
+            CHECK(v > lastT * 1.1, "ts9 tone raises highs (" << t << ")");
+            lastT = v;
+        }
+        CHECK(pedal(0, 5, 3, 220, 0.001f).rms < pedal(0, 5, 7, 220, 0.001f).rms, "ts9 level raises the output");
+        CHECK(std::abs(tilt(5, 3) / tilt(5, 7) - 1) < 0.01, "ts9 level leaves the timbre alone");
+        for (float k : { 0.0f, 10.0f })
+        {
+            CircuitTS9 p;
+            const int n = 48000;
+            p.prepare(48000, n);
+            p.setKnobs(k, k, 10);
+            std::vector<float> x((size_t)n, 0.0f);
+            x[0] = 0.5f;
+            p.process(x.data(), n);
+            std::fill(x.begin(), x.end(), 0.0f), p.process(x.data(), n);
+            float tail = 0;
+            for (float v : x)
+                tail = std::isfinite(v) ? std::max(tail, std::abs(v)) : 1e9f;
+            CHECK(tail < 1e-4f, "ts9 stable at drive/tone " << k << " (" << tail << ")");
+        }
+    }
+
     // 0. Benchmark (informative, machine dependent): seconds of audio per second of CPU, block 128.
     {
         auto bench = [&](const char* label, double sr, bool irs, bool allFx)
@@ -348,6 +416,21 @@ int main(int argc, char** argv)
         benchCircuit("circuit A     ", CircuitAmp());
         benchCircuit("circuit B     ", CircuitAmpFull(CircuitAmpFull::as1967));
         benchCircuit("circuit C     ", CircuitAmpFull(CircuitAmpFull::lead1968));
+        {
+            CircuitTS9 ts;
+            ts.prepare(48000, 128);
+            ts.setKnobs(7, 5, 5);
+            std::vector<float> x((size_t)di.getNumSamples());
+            const auto t0 = juce::Time::getHighResolutionTicks();
+            for (int i = 0; i < 10; ++i)
+            {
+                std::copy(di.getReadPointer(0), di.getReadPointer(0) + x.size(), x.begin());
+                for (size_t pos = 0; pos < x.size(); pos += 128)
+                    ts.process(x.data() + pos, (int)std::min<size_t>(128, x.size() - pos));
+            }
+            const double cpu = juce::Time::highResolutionTicksToSeconds(juce::Time::getHighResolutionTicks() - t0);
+            std::cout << "bench pedal ts9   : " << juce::String(10.0 * (double)x.size() / 48000 / cpu, 1) << "x real time\n";
+        }
         bench("amp only      ", 48000, false, false);
         bench("amp + cab     ", 48000, true, false);
         bench("full chain    ", 48000, true, true);
