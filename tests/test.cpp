@@ -373,6 +373,7 @@ int main(int argc, char** argv)
 
     {
         // Boost: the gain the schematic gives (Phase 0: +22.3 dB at 1 kHz, +3.7 dB at 100 Hz, full Level).
+        // Digital full scale is 6.91 V peak: 0.01 is 69 mV.
         auto boost = [&](float level, int period, float amp) { return measurePedal(CircuitFortin33(), level, 0, 0, period, amp); };
         const double g1k = juce::Decibels::gainToDecibels(boost(10, 48, 0.01f).rms), g100 = juce::Decibels::gainToDecibels(boost(10, 480, 0.01f).rms);
         std::cout << "fortin33 full level: 1 kHz " << g1k << " dB, 100 Hz " << g100 << " dB\n";
@@ -380,14 +381,14 @@ int main(int argc, char** argv)
         double last = 0;
         for (float l : { 2.0f, 5.0f, 8.0f, 10.0f })
         {
-            const auto r = boost(l, 220, 0.1f);
+            const auto r = boost(l, 220, 0.02f);
             std::cout << "fortin33 level " << l << ": gain " << juce::Decibels::gainToDecibels(r.rms) << " dB, thd " << r.thd * 100 << "%\n";
             CHECK(r.rms > last, "fortin33 level raises the output (" << l << ")");
-            CHECK(r.thd < 0.01, "fortin33 clean at 100 mV (" << l << ")");
+            CHECK(r.thd < 0.01, "fortin33 clean at 140 mV (" << l << ")");
             last = r.rms;
         }
-        const auto hot = boost(10, 220, 1.5f);
-        std::cout << "fortin33 1.5 V in: thd " << hot.thd * 100 << "%, crest " << hot.crest << "\n";
+        const auto hot = boost(10, 220, 0.3f);
+        std::cout << "fortin33 2 V in: thd " << hot.thd * 100 << "%, crest " << hot.crest << "\n";
         CHECK(hot.rms > 0 && hot.thd > 0.02, "fortin33 saturates at the rails with a hot input");
         CircuitFortin33 p;
         p.prepare(48000, 48000);
@@ -400,6 +401,160 @@ int main(int argc, char** argv)
         for (float v : x)
             tail = std::isfinite(v) ? std::max(tail, std::abs(v)) : 1e9f;
         CHECK(tail < 1e-4f, "fortin33 stable (" << tail << ")");
+    }
+    // P3. Pedal circuits against their captures, with sines at real levels (digital full scale 6.91 V peak):
+    // the small-signal response (2 mV) at nine frequencies, and the distortion at 220 Hz at 20 mV,
+    // 200 mV and 1 V. Captures are measured once; MJR_CALIBRATE=1 searches the TS9's tuning against them.
+    struct PedalMeasure
+    {
+        std::array<double, 9> gain {}; // dB, small signal
+        std::array<double, 3> thd {};  // 220 Hz
+    };
+    const std::array<double, 9> pedalHz { 63, 125, 250, 500, 720, 1000, 2000, 4000, 8000 };
+    auto measureWith = [&](auto&& run) // run(std::vector<float>&): a fresh unit, in place
+    {
+        auto sine = [&](double hz, float amp, bool wantThd)
+        {
+            const int n = 512 * 94;
+            std::vector<float> x((size_t)n);
+            for (int i = 0; i < n; ++i)
+                x[(size_t)i] = amp * (float)std::sin(2 * juce::MathConstants<double>::pi * hz * i / 48000);
+            run(x);
+            double s = 0, c = 0, all = 0;
+            for (int i = n / 2; i < n; ++i)
+            {
+                const double w = 2 * juce::MathConstants<double>::pi * hz * i / 48000, v = x[(size_t)i];
+                s += v * std::sin(w), c += v * std::cos(w), all += v * v;
+            }
+            const double a1 = 2.0 / (n / 2) * std::sqrt(s * s + c * c), fund = a1 * a1 / 2 + 1e-30, power = all / (n / 2);
+            return wantThd ? std::sqrt(std::max(0.0, power - fund) / fund) : 10 * std::log10(fund / (amp * amp / 2.0));
+        };
+        PedalMeasure m;
+        for (size_t i = 0; i < pedalHz.size(); ++i)
+            m.gain[i] = sine(pedalHz[i], 0.0003f, false);
+        const std::array<float, 3> amps { 0.003f, 0.03f, 0.15f };
+        for (size_t i = 0; i < amps.size(); ++i)
+            m.thd[i] = sine(220, amps[i], true);
+        return m;
+    };
+    struct PedalCapture
+    {
+        std::string name;
+        std::array<float, 3> knobs;
+        PedalMeasure m;
+    };
+    auto measureCaptures = [&](const juce::File& dir, bool oneKnob)
+    {
+        std::vector<PedalCapture> out;
+        static const std::regex three(R"(Drive\s*([0-9.]+)\s*Tone\s*([0-9.]+)\s*Level\s*([0-9.]+))"), percent(R"(([0-9.]+)\s*%)");
+        for (auto& f : dir.findChildFiles(juce::File::findFiles, false, "*.nam"))
+        {
+            const auto name = f.getFileNameWithoutExtension().toStdString();
+            std::smatch r;
+            std::array<float, 3> k {};
+            if (!oneKnob && std::regex_search(name, r, three))
+                k = { std::stof(r[1]), std::stof(r[2]), std::stof(r[3]) };
+            else if (oneKnob && std::regex_search(name, r, percent))
+                k = { std::stof(r[1]) / 10, 0, 0 };
+            else
+                continue;
+            auto cap = nam::get_dsp(std::filesystem::path(f.getFullPathName().toStdString()));
+            out.push_back({ name, k, measureWith([&](std::vector<float>& x)
+            {
+                cap->ResetAndPrewarm(48000, 512);
+                std::vector<float> y(x.size());
+                for (size_t pos = 0; pos < x.size(); pos += 512)
+                {
+                    float* in = x.data() + pos;
+                    float* o = y.data() + pos;
+                    cap->process(&in, &o, 512);
+                }
+                x = y;
+            }) });
+        }
+        std::sort(out.begin(), out.end(), [](auto& a, auto& b) { return a.knobs < b.knobs; });
+        return out;
+    };
+    // Errors, dB: level = model - capture at 720 Hz (mean offset and spread around it), shape = the
+    // response once the level is matched, thd = distortion ratio.
+    struct PedalScore { double offset, spread, shape, thd; };
+    auto score = [&](const std::vector<PedalCapture>& caps, auto make, bool verbose)
+    {
+        std::vector<PedalMeasure> ms;
+        for (auto& c : caps)
+            ms.push_back(measureWith([&](std::vector<float>& x)
+            {
+                auto p = make();
+                p.prepare(48000, 512);
+                p.setKnobs(c.knobs[0], c.knobs[1], c.knobs[2]);
+                for (size_t pos = 0; pos < x.size(); pos += 512)
+                    p.process(x.data() + pos, 512);
+            }));
+        PedalScore sc {};
+        for (size_t j = 0; j < caps.size(); ++j)
+            sc.offset += (ms[j].gain[4] - caps[j].m.gain[4]) / (double)caps.size();
+        for (size_t j = 0; j < caps.size(); ++j)
+        {
+            const auto& c = caps[j].m;
+            const auto& m = ms[j];
+            const double level = m.gain[4] - c.gain[4];
+            double shape = 0, thd = 0;
+            for (size_t i = 0; i < pedalHz.size(); ++i)
+                shape += std::abs(m.gain[i] - c.gain[i] - level) / (double)pedalHz.size();
+            for (size_t i = 0; i < 3; ++i)
+                thd += std::abs(20 * std::log10((m.thd[i] + 1e-4) / (c.thd[i] + 1e-4))) / 3;
+            sc.spread += std::abs(level - sc.offset) / (double)caps.size();
+            sc.shape += shape / (double)caps.size(), sc.thd += thd / (double)caps.size();
+            if (verbose)
+            {
+                std::cout << "  " << caps[j].name << ": level " << juce::String(level, 1) << " dB, shape " << juce::String(shape, 2)
+                          << " dB |";
+                for (size_t i = 0; i < pedalHz.size(); ++i)
+                    std::cout << " " << juce::String(m.gain[i] - c.gain[i] - level, 1);
+                std::cout << " | thd capture/model";
+                for (size_t i = 0; i < 3; ++i)
+                    std::cout << " " << juce::String(c.thd[i] * 100, 1) << "/" << juce::String(m.thd[i] * 100, 1) << "%";
+                std::cout << "\n";
+            }
+        }
+        return sc;
+    };
+    {
+        const auto pedals = juce::File::getSpecialLocation(juce::File::userMusicDirectory).getChildFile("Music Production/NAM Profile/Pedals");
+        const auto tsDir = pedals.getChildFile("Ibanez TS9 Tube Screamer"), boostDir = pedals.getChildFile("Fortin 33");
+        if (tsDir.isDirectory())
+        {
+            const auto caps = measureCaptures(tsDir, false);
+            std::cout << "ts9 circuit vs captures (shape at 63 125 250 500 720 1k 2k 4k 8k Hz, dB; thd at 20 mV, 200 mV, 1 V):\n";
+            const auto sc = score(caps, [] { return CircuitTS9(); }, true);
+            std::cout << "ts9 vs captures: level offset " << sc.offset << " dB, spread " << sc.spread << " dB, shape " << sc.shape
+                      << " dB, thd " << sc.thd << " dB\n";
+            if (std::getenv("MJR_CALIBRATE"))
+            {
+                double best = 1e9;
+                for (double dt : { 0.0, 0.2, 0.4, 0.6, 0.8, 1.0 })
+                    for (double lt : { 0.0, 0.5, 1.0 })
+                        for (double n : { 1.5, 1.752, 2.0 })
+                        {
+                            CircuitTS9::Tuning t;
+                            t.driveTaper = dt, t.levelTaper = lt, t.diodeN = n;
+                            const auto s = score(caps, [t] { return CircuitTS9(t); }, false);
+                            const double total = s.spread + s.shape + s.thd;
+                            if (total < best)
+                                best = total, std::cout << "  calibrate: drive taper " << dt << ", level taper " << lt << ", n " << n
+                                                        << ": offset " << s.offset << ", spread " << s.spread << ", shape " << s.shape
+                                                        << ", thd " << s.thd << "\n";
+                        }
+            }
+        }
+        if (boostDir.isDirectory())
+        {
+            const auto caps = measureCaptures(boostDir, true);
+            std::cout << "fortin33 circuit vs captures (their level is lost: the spread is what counts):\n";
+            const auto sc = score(caps, [] { return CircuitFortin33(); }, true);
+            std::cout << "fortin33 vs captures: level offset " << sc.offset << " dB, spread " << sc.spread << " dB, shape " << sc.shape
+                      << " dB, thd " << sc.thd << " dB\n";
+        }
     }
     // 0. Benchmark (informative, machine dependent): seconds of audio per second of CPU, block 128.
     {

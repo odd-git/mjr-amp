@@ -1,6 +1,7 @@
 #pragma once
 // Pedals modelled from their schematics, like the circuit amps. Voltages are AC around each pedal's
-// reference (Vref = 4.5 V); one digital unit at the input is `Tuning::inputVolts` volts.
+// reference (Vref = 4.5 V). Digital full scale is `Tuning::inputVolts` volts peak at the input and
+// `outputVolts` at the output: the TS9 captures' reamp calibration (+16 dBu in, +18 dBu out).
 //
 // Overdrive (TS9-style, values from the TS808/TS9 schematic as published in the BeanScream clone):
 //  - input buffer: 20n into 510k to Vref (16 Hz), 2SC1815 emitter follower, 1uF into 10k (16 Hz);
@@ -18,9 +19,10 @@ public:
     struct Tuning
     {
         // ponytail: datasheet values until the captures calibrate them (phase 3).
-        double inputVolts = 1.0;            // volts per digital unit at the input
+        double inputVolts = 6.91, outputVolts = 8.71; // full scale, peak: +16 / +18 dBu
         double diodeIs = 2.52e-9, diodeN = 1.752; // 1N914
         double rail = 3.5;                  // 4558 swing around Vref on 9 V
+        double driveTaper = 0, levelTaper = 0; // 0 = ideal log (10% at half), 1 = linear
     };
 
     CircuitTS9() = default;
@@ -49,9 +51,9 @@ public:
             return;
         const bool toneMoved = k[1] != knobs[1];
         knobs = k;
-        rFeedback = 51e3 + 500e3 * audio(drive);
-        const double a = audio(level);
-        levelGain = a * 100e3 / (1e3 + 100e3) / tune.inputVolts;
+        rFeedback = 51e3 + 500e3 * taper(drive, tune.driveTaper);
+        const double a = taper(level, tune.levelTaper);
+        levelGain = a * 100e3 / (1e3 + 100e3) / tune.outputVolts;
         if (toneMoved)
         {
             // Nodes: 0 X (+ input, and - through the op-amp), 1 wiper, 2 between 220n and 220 ohm.
@@ -77,7 +79,11 @@ public:
     }
 
 private:
-    static double audio(float v) { return juce::jlimit(1e-4, 1.0 - 1e-4, (std::pow(10.0, v / 5.0) - 1.0) / 99.0); }
+    static double taper(float v, double linear)
+    {
+        const double log = (std::pow(10.0, v / 5.0) - 1.0) / 99.0;
+        return juce::jlimit(1e-4, 1.0 - 1e-4, log + linear * (v / 10.0 - log));
+    }
     double clip(double v) const { return tune.rail * std::tanh(v / tune.rail); }
 
     double tick(double vin)
@@ -128,7 +134,7 @@ public:
     struct Tuning
     {
         // ponytail: datasheet values until the captures calibrate them (phase 3).
-        double inputVolts = 1.0;   // volts per digital unit at the input
+        double inputVolts = 6.91, outputVolts = 6.91; // full scale, peak: as the TS9 (these captures lost theirs)
         double rail = 7.5;         // TL071 swing around VR with VC = 18 V
         double sourceOhms = 10e3;  // the guitar's pickup, resistance only: what Q1 clamps against
     };
@@ -166,7 +172,7 @@ public:
     void setKnobs(float levelK, float = 0, float = 0)
     {
         level = levelK;
-        gain = juce::jlimit(1e-4, 1.0 - 1e-4, (std::pow(10.0, levelK / 5.0) - 1.0) / 99.0) / tune.inputVolts;
+        gain = juce::jlimit(1e-4, 1.0 - 1e-4, (std::pow(10.0, levelK / 5.0) - 1.0) / 99.0) / tune.outputVolts;
     }
 
     void process(float* x, int n)
