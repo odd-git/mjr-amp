@@ -110,3 +110,118 @@ private:
     std::array<float, 3> knobs {};
     juce::dsp::Oversampling<float> os { 1, 2, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true };
 };
+
+// Boost (Fortin 33-style, values from the schematic the user supplied):
+//  - Q1 (collector at IN, base to ground through 1M and D8/D9): off at signal level; it clamps
+//    negative peaks below about -1.2 V through the source's resistance;
+//  - IN -> R3 4k7 -> C1 47n -> Q2 base (R4 1M to VR). Q2 + TL071 act as a nullor: the op-amp holds
+//    Q2's emitter at its base. Feedback: R6 220k from the op-amp to the emitter, C4 1u from the
+//    emitter to the bus; bus: R7 820 + R8 1k8 + C5 100n + R9 220 to ground, R10 3k9 to X (C6 470n,
+//    R12 20k + R11 1k to ground, R13 120 + R14 47 paralleled by C7 47n to Y, R15 2k2 to OUT),
+//    R17 4k7 + R16 12k + C8 10n to OUT. Op-amp -> C3 4u7 -> OUT, Level A5k from OUT to ground.
+//  - Supply: VC from the charge pump, taken as 18 V; VR at half of it (the drawn divider gives an
+//    impossible operating point, see the notes). Swing about 7.5 V either side of VR.
+// Small signal at full Level: +22 dB around 1 kHz, +3.7 dB at 100 Hz; Level only attenuates.
+class CircuitFortin33
+{
+public:
+    struct Tuning
+    {
+        // ponytail: datasheet values until the captures calibrate them (phase 3).
+        double inputVolts = 1.0;   // volts per digital unit at the input
+        double rail = 7.5;         // TL071 swing around VR with VC = 18 V
+        double sourceOhms = 10e3;  // the guitar's pickup, resistance only: what Q1 clamps against
+    };
+
+    CircuitFortin33() = default;
+    explicit CircuitFortin33(Tuning t) : tune(t) {}
+
+    void prepare(double sampleRate, int maxBlock)
+    {
+        os.initProcessing((size_t)maxBlock);
+        os.reset();
+        const double fs = sampleRate * (double)os.getOversamplingFactor();
+        enum { a, b, e, o, bus, n1, n2, n3, X, n4, n5, Y, n6, n7, OUT, iop };
+        net.begin();
+        net.r(a, -1, 4.7e3), net.c(0, a, b, 47e-9, fs), net.r(b, -1, 1e6);
+        net.r(o, e, 220e3), net.c(1, e, bus, 1e-6, fs);
+        net.r(bus, n1, 820), net.r(n1, n2, 1.8e3), net.c(2, n2, n3, 100e-9, fs), net.r(n3, -1, 220);
+        net.r(bus, X, 3.9e3), net.c(3, X, -1, 470e-9, fs), net.r(X, n4, 20e3), net.r(n4, -1, 1e3);
+        net.r(X, n5, 120), net.r(n5, Y, 47), net.c(4, Y, X, 47e-9, fs), net.r(Y, OUT, 2.2e3);
+        net.r(bus, n6, 4.7e3), net.r(n6, n7, 12e3), net.c(5, n7, OUT, 10e-9, fs);
+        net.c(6, o, OUT, 4.7e-6, fs), net.r(OUT, -1, 5e3);
+        net.y[o][iop] = -1; // the op-amp's output current
+        auto saturated = net.y;
+        net.y[iop][e] = 1, net.y[iop][b] = -1; // linear: emitter follows base
+        net.end();
+        saturated[iop][o] = 1;                // saturated: the output is a voltage source
+        invSaturated = circuit::invert(saturated);
+        net.reset();
+        vIn = 0;
+        setKnobs(level);
+    }
+    int getLatency() const { return (int)std::lround(os.getLatencyInSamples()); }
+
+    // 0..10, as on the pedal: the one knob is Level.
+    void setKnobs(float levelK, float = 0, float = 0)
+    {
+        level = levelK;
+        gain = juce::jlimit(1e-4, 1.0 - 1e-4, (std::pow(10.0, levelK / 5.0) - 1.0) / 99.0) / tune.inputVolts;
+    }
+
+    void process(float* x, int n)
+    {
+        juce::dsp::AudioBlock<float> block(&x, 1, (size_t)n);
+        auto up = os.processSamplesUp(block);
+        float* s = up.getChannelPointer(0);
+        for (size_t i = 0; i < up.getNumSamples(); ++i)
+            s[i] = (float)(tick(s[i] * tune.inputVolts) * gain);
+        os.processSamplesDown(block);
+    }
+
+private:
+    static constexpr int nodes = 16, opOut = 3, opCurrent = 15, out = 14;
+
+    double tick(double vs)
+    {
+        // Q1: its base-collector junction and D8/D9 in series, one junction with n = 2.75 fitted at 1 mA
+        // (1.24 V); the input sees it through the source resistance.
+        constexpr double is = 2.8e-11, m = 2.752 * 0.02585;
+        for (int it = 0; it < 8; ++it)
+        {
+            const double ex = std::exp(std::min(-vIn / m, 40.0));
+            const double f = vIn - vs - tune.sourceOhms * is * (ex - 1), df = 1 + tune.sourceOhms * is / m * ex;
+            const double step = juce::jlimit(-0.2, 0.2, f / df);
+            vIn -= step;
+            if (std::abs(step) < 1e-9)
+                break;
+        }
+        std::array<double, nodes> in {};
+        in[0] = vIn / 4.7e3;
+        auto rhs = net.withHistory(in);
+        auto v = net.apply(net.inv, rhs);
+        const double want = v[opOut], got = soft(want);
+        if (got != want) // past the knee: the op-amp's output stops following
+        {
+            rhs[opCurrent] = got;
+            v = net.apply(invSaturated, rhs);
+        }
+        net.update(v);
+        return v[out];
+    }
+    double soft(double x) const
+    {
+        const double knee = 0.8 * tune.rail, ax = std::abs(x);
+        if (ax <= knee)
+            return x;
+        const double top = tune.rail - knee;
+        return std::copysign(knee + top * std::tanh((ax - knee) / top), x);
+    }
+
+    Tuning tune;
+    float level = 5;
+    double gain = 0.1, vIn = 0;
+    circuit::Network<nodes, 7> net;
+    std::array<std::array<double, nodes>, nodes> invSaturated {};
+    juce::dsp::Oversampling<float> os { 1, 2, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true };
+};

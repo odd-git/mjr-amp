@@ -18,6 +18,7 @@
 #include <array>
 #include <cmath>
 #include <complex>
+#include <string_view>
 #include <vector>
 
 namespace circuit
@@ -398,24 +399,37 @@ struct Network
     // Current injections in, node voltages out.
     std::array<double, N> solve(const std::array<double, N>& in)
     {
-        auto rhs = in;
+        const auto v = apply(inv, withHistory(in));
+        update(v);
+        return v;
+    }
+    // The steps of solve(), for a caller that picks between matrices sharing these capacitors.
+    std::array<double, N> withHistory(std::array<double, N> rhs) const
+    {
         for (size_t i = 0; i < NC; ++i)
         {
             rhs[(size_t)cp[i]] += cj[i];
             if (cq[i] >= 0)
                 rhs[(size_t)cq[i]] -= cj[i];
         }
+        return rhs;
+    }
+    static std::array<double, N> apply(const std::array<std::array<double, N>, N>& m, const std::array<double, N>& rhs)
+    {
         std::array<double, N> v {};
         for (size_t a = 0; a < N; ++a)
             for (size_t b = 0; b < N; ++b)
-                v[a] += inv[a][b] * rhs[b];
+                v[a] += m[a][b] * rhs[b];
+        return v;
+    }
+    void update(const std::array<double, N>& v)
+    {
         for (size_t i = 0; i < NC; ++i)
         {
             const double vpq = v[(size_t)cp[i]] - (cq[i] >= 0 ? v[(size_t)cq[i]] : 0.0);
             const double cur = cg[i] * vpq - cj[i];
             cj[i] = cg[i] * vpq + cur;
         }
-        return v;
     }
 
 private:
@@ -623,15 +637,45 @@ struct GridFeed
 };
 } // namespace circuit
 
+// Everything the drawing fixes only nominally (tolerances, pot tapers, supplies, tube spread) is a
+// runtime parameter, so the fitter (tools/render.cpp, nam-twin) can move it. Defaults = amps B and C.
+// Tapers: 0 is linear, e > 0 is (10^(e x) - 1) / (10^e - 1): 2 is the usual audio pot.
+#define MJR_DESIGN_PARAMS(X) \
+X(bV1, 268) X(bV2a, 313) X(bV2b, 321) X(bDriver, 470) X(bPower, 590) \
+X(ecc83Mu, 100) X(ecc83Kg1, 1060) X(ecc82Mu, 21.5) X(ecc82Kg1, 1180) X(kt88Mu, 8.8) X(kt88Kg1, 730) \
+X(rk1Bright, 2.7e3) X(ck1Bright, 0.68e-6) X(rk1Normal, 820) X(v2aCharge, 0.0005) X(v2aRecover, 0.02) \
+X(cCouple1, 2.2e-9) X(cCouple2, 22e-9) X(rMix, 470e3) X(cMixBright, 500e-12) \
+X(potVol1, 1e6) X(potVol2, 1e6) X(taperVol1, 2) X(taperVol2, 2) \
+X(cTreble, 500e-12) X(rSlope, 33e3) X(cBass, 22e-9) X(cMid, 22e-9) X(cToneOut, 22e-9) \
+X(potTreble, 250e3) X(potBass, 1e6) X(potMid, 25e3) X(taperTreble, 0) X(taperBass, 2) X(taperMid, 0) \
+X(potPresence, 5e3) X(cPresence, 0.68e-6) X(taperPresence, 0) X(rFeedTail, 470) \
+X(driverHpHz, 12.5) X(otLowHz, 6) X(otHighHz, 9000) \
+X(raa, 2500) X(turns, 12.5) X(supplyR, 40) X(supplyC, 187.5e-6 + 200e-6)
+struct CircuitAmpDesign
+{
+    double feedbackR, biasVolts;
+    float inputGain, outputScale;
+#define X(name, value) double name = value;
+    MJR_DESIGN_PARAMS(X)
+#undef X
+    bool set(std::string_view n, double v)
+    {
+        if (n == "feedbackR") return feedbackR = v, true;
+        if (n == "biasVolts") return biasVolts = v, true;
+        if (n == "inputGain") return inputGain = (float)v, true;
+        if (n == "outputScale") return outputScale = (float)v, true;
+#define X(name, value) if (n == #name) return name = v, true;
+        MJR_DESIGN_PARAMS(X)
+#undef X
+        return false;
+    }
+};
+
 class CircuitAmpFull
 {
 public:
     using Jack = CircuitAmp::Jack;
-    struct Design
-    {
-        double feedbackR, biasVolts;
-        float inputGain, outputScale;
-    };
+    using Design = CircuitAmpDesign;
     static constexpr Design as1967 { 47e3, 82.0, 1.0f, 0.0013f };     // amp B: as drawn
     static constexpr Design lead1968 { 100e3, 70.0, 2.0f, 0.0013f };  // amp C: the 1968 lead mods
 
@@ -644,23 +688,29 @@ public:
         os.reset();
         fs = sampleRate * (double)os.getOversamplingFactor();
         // Supplies chosen so the quiescent voltages land on the service sheet's (see the header).
-        v1Bright.build(ecc83, 268, 100e3, 2.7e3, 0.68e-6, 0, fs);
-        v1Normal.build(ecc83, 268, 100e3, 820, 250e-6, 0, fs);
-        v2a.build(ecc83, 313, 100e3, 470, 25e-6, 470, fs, 0.0005, 0.02);
-        v2b.build(ecc83, 321, 100e3, 2.7e3, 100e3, fs);
-        static const DriverPair pair = [] { DriverPair p; p.build(ecc82, 470, 47e3, 1.5e3); return p; }(); // ~0.3 s, once
-        v3 = pair;
+        const auto& d = design;
+        const Triode ecc83 { d.ecc83Mu, circuit::ecc83.ex, d.ecc83Kg1, circuit::ecc83.kp, circuit::ecc83.kvb };
+        const Triode ecc82 { d.ecc82Mu, circuit::ecc82.ex, d.ecc82Kg1, circuit::ecc82.kp, circuit::ecc82.kvb };
+        v1Bright.build(ecc83, d.bV1, 100e3, d.rk1Bright, d.ck1Bright, 0, fs);
+        v1Normal.build(ecc83, d.bV1, 100e3, d.rk1Normal, 250e-6, 0, fs);
+        v2a.build(ecc83, d.bV2a, 100e3, 470, 25e-6, 470, fs, d.v2aCharge, d.v2aRecover);
+        v2b.build(ecc83, d.bV2b, 100e3, 2.7e3, 100e3, fs);
+        static const DriverPair pair = [] { DriverPair p; p.build(circuit::ecc82, 470, 47e3, 1.5e3); return p; }(); // ~0.3 s, once
+        if (d.bDriver == 470 && d.ecc82Mu == circuit::ecc82.mu && d.ecc82Kg1 == circuit::ecc82.kg1)
+            v3 = pair;
+        else
+            v3.build(ecc82, d.bDriver, 47e3, 1.5e3);
         for (auto* g : { &gridA, &gridB })
             g->dt = 1.0 / fs, g->bias = design.biasVolts, g->vcap = 0;
         buildKt88();
         rSrc1 = v1Bright.outputResistance(ecc83), rSrc2 = v1Normal.outputResistance(ecc83), rSrcTone = v2a.outputResistance(ecc83);
         volume.reset(), tone.reset(), presence.reset();
-        hp1.highPass(12.5, fs), hp2.highPass(12.5, fs); // .047 into the driver's 270k grid leaks
-        otLow.highPass(6, fs), otHigh.lowPass(9000, fs);
+        hp1.highPass(d.driverHpHz, fs), hp2.highPass(d.driverHpHz, fs); // .047 into the driver's 270k grid leaks
+        otLow.highPass(d.otLowHz, fs), otHigh.lowPass(d.otHighHz, fs);
         knobs.fill(-1);
-        vAA = 0, speaker = 0, bPlus = 590;
+        vAA = 0, speaker = 0, bPlus = d.bPower;
         iIdle = 4 * idleCurrent;
-        vNoLoad = 590 + supplyR * (iIdle + 0.03);
+        vNoLoad = d.bPower + d.supplyR * (iIdle + 0.03);
     }
     int getLatency() const { return (int)std::lround(os.getLatencyInSamples()); }
 
@@ -673,40 +723,44 @@ public:
         const bool toneMoved = k[1] != knobs[1] || k[2] != knobs[2] || k[3] != knobs[3];
         const bool volMoved = k[4] != knobs[4] || k[5] != knobs[5], presMoved = k[0] != knobs[0];
         knobs = k;
-        auto audio = [](float v) { return juce::jlimit(1e-4, 1.0 - 1e-4, (std::pow(10.0, v / 5.0) - 1.0) / 99.0); };
-        auto lin = [](float v) { return juce::jlimit(1e-4, 1.0 - 1e-4, v / 10.0); };
+        const auto& d = design;
+        auto pot = [](float v, double e)
+        {
+            const double x = std::abs(e) < 1e-6 ? v / 10.0 : (std::pow(10.0, v * e / 10.0) - 1.0) / (std::pow(10.0, e) - 1.0);
+            return juce::jlimit(1e-4, 1.0 - 1e-4, x);
+        };
         if (volMoved)
         {
             // Nodes: 0 ch I plate, 1 ch II plate, 2 V2a grid (mix), 3 pot II top, 4 pot II wiper, 5 pot I wiper, 6 pot I top.
-            const double a = audio(vol2), b = audio(vol1);
+            const double a = pot(vol2, d.taperVol2), b = pot(vol1, d.taperVol1);
             volume.begin();
             volume.r(0, -1, rSrc1), volume.r(1, -1, rSrc2);
-            volume.c(0, 0, 6, 2.2e-9, fs), volume.c(1, 1, 3, 22e-9, fs);
-            volume.r(3, 4, (1 - a) * 1e6), volume.r(4, -1, a * 1e6), volume.r(4, 2, 470e3);
-            volume.r(6, 5, (1 - b) * 1e6), volume.r(5, -1, b * 1e6), volume.r(2, 5, 470e3), volume.c(2, 2, 5, 500e-12, fs);
+            volume.c(0, 0, 6, d.cCouple1, fs), volume.c(1, 1, 3, d.cCouple2, fs);
+            volume.r(3, 4, (1 - a) * d.potVol2), volume.r(4, -1, a * d.potVol2), volume.r(4, 2, d.rMix);
+            volume.r(6, 5, (1 - b) * d.potVol1), volume.r(5, -1, b * d.potVol1), volume.r(2, 5, d.rMix), volume.c(2, 2, 5, d.cMixBright, fs);
             volume.end();
         }
         if (toneMoved)
         {
             // Nodes: 0 V2a plate, 1 treble top, 2 treble wiper, 3 bass top, 4 slope node, 5 bass bottom, 6 mid wiper, 7 V2b grid.
-            const double t = lin(treble), l = audio(bass), m = lin(middle);
+            const double t = pot(treble, d.taperTreble), l = pot(bass, d.taperBass), m = pot(middle, d.taperMid);
             tone.begin();
             tone.r(0, -1, rSrcTone);
-            tone.c(0, 0, 1, 500e-12, fs);
-            tone.r(1, 2, (1 - t) * 250e3), tone.r(2, 3, t * 250e3);
-            tone.r(0, 4, 33e3), tone.c(1, 4, 3, 22e-9, fs);
-            tone.r(3, 5, l * 1e6);
-            tone.r(5, 6, (1 - m) * 25e3), tone.r(6, -1, m * 25e3), tone.c(2, 4, 6, 22e-9, fs);
-            tone.c(3, 2, 7, 22e-9, fs), tone.r(7, -1, 20e6); // the 1M leak, bootstrapped
+            tone.c(0, 0, 1, d.cTreble, fs);
+            tone.r(1, 2, (1 - t) * d.potTreble), tone.r(2, 3, t * d.potTreble);
+            tone.r(0, 4, d.rSlope), tone.c(1, 4, 3, d.cBass, fs);
+            tone.r(3, 5, l * d.potBass);
+            tone.r(5, 6, (1 - m) * d.potMid), tone.r(6, -1, m * d.potMid), tone.c(2, 4, 6, d.cMid, fs);
+            tone.c(3, 2, 7, d.cToneOut, fs), tone.r(7, -1, 20e6); // the 1M leak, bootstrapped
             tone.end();
         }
         if (presMoved)
         {
             // Nodes: 0 N (V2a's lower cathode node), 1 presence wiper. The feedback arrives through feedbackR.
-            const double w = lin(presenceK);
+            const double w = pot(presenceK, d.taperPresence);
             presence.begin();
-            presence.r(0, -1, 470), presence.r(0, -1, design.feedbackR);
-            presence.r(0, 1, (1 - w) * 5e3), presence.r(1, -1, w * 5e3), presence.c(0, 1, -1, 0.68e-6, fs);
+            presence.r(0, -1, d.rFeedTail), presence.r(0, -1, d.feedbackR);
+            presence.r(0, 1, (1 - w) * d.potPresence), presence.r(1, -1, w * d.potPresence), presence.c(0, 1, -1, d.cPresence, fs);
             presence.end();
         }
     }
@@ -747,27 +801,28 @@ private:
         {
             double s1, s2;
             i1 = 2 * kt88At(g1, bPlus - 0.5 * v, s1), i2 = 2 * kt88At(g2, bPlus + 0.5 * v, s2);
-            const double f = v - raa * (i1 - i2), df = 1 + raa * (s1 + s2); // s = dI/dVp of one tube; x2 tubes, x0.5
+            const double f = v - design.raa * (i1 - i2), df = 1 + design.raa * (s1 + s2); // s = dI/dVp of one tube; x2 tubes, x0.5
             v -= f / df;
         }
         vAA = v = juce::jlimit(-2.0 * bPlus, 2.0 * bPlus, v);
         // Supply: the doubler's reservoir sags with the average current.
-        bPlus += ((vNoLoad - bPlus) / supplyR - (i1 + i2 + 0.03)) / (supplyC * fs);
-        speaker = otHigh(otLow((float)(-v / turns))); // the secondary is wired so the feedback is negative
+        bPlus += ((vNoLoad - bPlus) / design.supplyR - (i1 + i2 + 0.03)) / (design.supplyC * fs);
+        speaker = otHigh(otLow((float)(-v / design.turns))); // the secondary is wired so the feedback is negative
         return speaker * design.outputScale;
     }
 
     // One KT88, ultra-linear (screen at 43% of the half primary): current and its slope vs plate voltage.
     void buildKt88()
     {
+        const circuit::Triode kt88 { design.kt88Mu, circuit::kt88.ex, design.kt88Kg1, circuit::kt88.kp, circuit::kt88.kvb };
         for (size_t a = 0; a < ktN; ++a)
             for (size_t b = 0; b < ktN; ++b)
             {
-                const double vg = ktVg(a), vp = ktVp(b), vs = 590 - 0.43 * (590 - vp);
-                kt[a][b] = (float)(circuit::kt88.ip(std::max(0.0, vs), vg) * std::tanh(std::max(0.0, vp) / 40.0));
+                const double vg = ktVg(a), vp = ktVp(b), vs = design.bPower - 0.43 * (design.bPower - vp);
+                kt[a][b] = (float)(kt88.ip(std::max(0.0, vs), vg) * std::tanh(std::max(0.0, vp) / 40.0));
             }
         double s;
-        idleCurrent = kt88At((float)-design.biasVolts, 590, s);
+        idleCurrent = kt88At((float)-design.biasVolts, design.bPower, s);
     }
     static constexpr size_t ktN = 192;
     static double ktVg(size_t i) { return -200.0 + 220.0 * (double)i / (double)(ktN - 1); }
@@ -799,6 +854,5 @@ private:
     std::array<float, 6> knobs {};
     double rSrc1 = 38e3, rSrc2 = 38e3, rSrcTone = 38e3, vAA = 0, bPlus = 590, vNoLoad = 600, iIdle = 0, idleCurrent = 0;
     float speaker = 0;
-    // 4x KT88 into ~2.5k anode to anode (200 W at 590 V); 16R tap. ponytail: supply resistance is an estimate.
-    static constexpr double raa = 2500, turns = 12.5, supplyR = 40, supplyC = 187.5e-6 + 200e-6;
+    // Design: 4x KT88 into ~2.5k anode to anode (200 W at 590 V); 16R tap. ponytail: supply resistance is an estimate.
 };

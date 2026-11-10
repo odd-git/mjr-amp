@@ -303,32 +303,33 @@ int main(int argc, char** argv)
         }
     }
 
-    // P1. Overdrive circuit (TS9): sines through it at the pedal's knobs.
+    // P1. Pedal circuits: sines through them at the pedal's knobs; rms is the gain.
+    auto measurePedal = [](auto p, float k0, float k1, float k2, int period, float amp)
     {
-        auto pedal = [](float drive, float tone, float level, int period, float amp)
+        const int n = period * 400;
+        p.prepare(48000, n);
+        p.setKnobs(k0, k1, k2);
+        std::vector<float> x((size_t)n);
+        for (int pass = 0; pass < 2; ++pass)
         {
-            CircuitTS9 p;
-            const int n = period * 400;
-            p.prepare(48000, n);
-            p.setKnobs(drive, tone, level);
-            std::vector<float> x((size_t)n);
-            for (int pass = 0; pass < 2; ++pass)
-            {
-                for (int i = 0; i < n; ++i)
-                    x[(size_t)i] = amp * (float)std::sin(2 * juce::MathConstants<double>::pi * i / period);
-                p.process(x.data(), n);
-            }
-            double s = 0, c = 0, all = 0, peak = 0;
             for (int i = 0; i < n; ++i)
-            {
-                const double w = 2 * juce::MathConstants<double>::pi * i / period, v = x[(size_t)i];
-                if (!std::isfinite(v))
-                    return Result { -1, -1, -1 };
-                s += v * std::sin(w), c += v * std::cos(w), all += v * v, peak = std::max(peak, std::abs(v));
-            }
-            const double a1 = 2.0 / n * std::sqrt(s * s + c * c), fund = a1 * a1 / 2, power = all / n;
-            return Result { std::sqrt(power) / (amp / std::sqrt(2.0)), std::sqrt(std::max(0.0, power - fund) / fund), peak / std::sqrt(power) };
-        };
+                x[(size_t)i] = amp * (float)std::sin(2 * juce::MathConstants<double>::pi * i / period);
+            p.process(x.data(), n);
+        }
+        double s = 0, c = 0, all = 0, peak = 0;
+        for (int i = 0; i < n; ++i)
+        {
+            const double w = 2 * juce::MathConstants<double>::pi * i / period, v = x[(size_t)i];
+            if (!std::isfinite(v))
+                return Result { -1, -1, -1 };
+            s += v * std::sin(w), c += v * std::cos(w), all += v * v, peak = std::max(peak, std::abs(v));
+        }
+        const double a1 = 2.0 / n * std::sqrt(s * s + c * c), fund = a1 * a1 / 2, power = all / n;
+        return Result { std::sqrt(power) / (amp / std::sqrt(2.0)), std::sqrt(std::max(0.0, power - fund) / fund), peak / std::sqrt(power) };
+    };
+    {
+        auto pedal = [&](float drive, float tone, float level, int period, float amp)
+        { return measurePedal(CircuitTS9(), drive, tone, level, period, amp); };
         const double mid = pedal(0, 5, 10, 64, 0.001f).rms, low = pedal(0, 5, 10, 480, 0.001f).rms;
         std::cout << "ts9 drive 0, level 10: gain 750 Hz " << juce::Decibels::gainToDecibels(mid) << " dB, 100 Hz "
                   << juce::Decibels::gainToDecibels(low) << " dB\n";
@@ -370,6 +371,36 @@ int main(int argc, char** argv)
         }
     }
 
+    {
+        // Boost: the gain the schematic gives (Phase 0: +22.3 dB at 1 kHz, +3.7 dB at 100 Hz, full Level).
+        auto boost = [&](float level, int period, float amp) { return measurePedal(CircuitFortin33(), level, 0, 0, period, amp); };
+        const double g1k = juce::Decibels::gainToDecibels(boost(10, 48, 0.01f).rms), g100 = juce::Decibels::gainToDecibels(boost(10, 480, 0.01f).rms);
+        std::cout << "fortin33 full level: 1 kHz " << g1k << " dB, 100 Hz " << g100 << " dB\n";
+        CHECK(std::abs(g1k - 22.3) < 1 && std::abs(g100 - 3.7) < 1.5, "fortin33 gain as the schematic");
+        double last = 0;
+        for (float l : { 2.0f, 5.0f, 8.0f, 10.0f })
+        {
+            const auto r = boost(l, 220, 0.1f);
+            std::cout << "fortin33 level " << l << ": gain " << juce::Decibels::gainToDecibels(r.rms) << " dB, thd " << r.thd * 100 << "%\n";
+            CHECK(r.rms > last, "fortin33 level raises the output (" << l << ")");
+            CHECK(r.thd < 0.01, "fortin33 clean at 100 mV (" << l << ")");
+            last = r.rms;
+        }
+        const auto hot = boost(10, 220, 1.5f);
+        std::cout << "fortin33 1.5 V in: thd " << hot.thd * 100 << "%, crest " << hot.crest << "\n";
+        CHECK(hot.rms > 0 && hot.thd > 0.02, "fortin33 saturates at the rails with a hot input");
+        CircuitFortin33 p;
+        p.prepare(48000, 48000);
+        p.setKnobs(10);
+        std::vector<float> x(48000, 0.0f);
+        x[0] = 0.5f;
+        p.process(x.data(), 48000);
+        std::fill(x.begin(), x.end(), 0.0f), p.process(x.data(), 48000);
+        float tail = 0;
+        for (float v : x)
+            tail = std::isfinite(v) ? std::max(tail, std::abs(v)) : 1e9f;
+        CHECK(tail < 1e-4f, "fortin33 stable (" << tail << ")");
+    }
     // 0. Benchmark (informative, machine dependent): seconds of audio per second of CPU, block 128.
     {
         auto bench = [&](const char* label, double sr, bool irs, bool allFx)
@@ -416,8 +447,8 @@ int main(int argc, char** argv)
         benchCircuit("circuit A     ", CircuitAmp());
         benchCircuit("circuit B     ", CircuitAmpFull(CircuitAmpFull::as1967));
         benchCircuit("circuit C     ", CircuitAmpFull(CircuitAmpFull::lead1968));
+        auto benchPedal = [&](const char* label, auto&& ts)
         {
-            CircuitTS9 ts;
             ts.prepare(48000, 128);
             ts.setKnobs(7, 5, 5);
             std::vector<float> x((size_t)di.getNumSamples());
@@ -429,8 +460,10 @@ int main(int argc, char** argv)
                     ts.process(x.data() + pos, (int)std::min<size_t>(128, x.size() - pos));
             }
             const double cpu = juce::Time::highResolutionTicksToSeconds(juce::Time::getHighResolutionTicks() - t0);
-            std::cout << "bench pedal ts9   : " << juce::String(10.0 * (double)x.size() / 48000 / cpu, 1) << "x real time\n";
-        }
+            std::cout << "bench " << label << ": " << juce::String(10.0 * (double)x.size() / 48000 / cpu, 1) << "x real time\n";
+        };
+        benchPedal("pedal ts9     ", CircuitTS9());
+        benchPedal("pedal fortin33", CircuitFortin33());
         bench("amp only      ", 48000, false, false);
         bench("amp + cab     ", 48000, true, false);
         bench("full chain    ", 48000, true, true);
