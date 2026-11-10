@@ -68,4 +68,4 @@ build/mjr-test <library dir> libs/NeuralAmpModelerCore/example_audio/input.wav [
 
 ## License
 
-AGPL-3.0 (JUCE is used under its AGPLv3 option). NeuralAmpModelerCore is MIT. The effects are Airwindows plugins (MIT, Chris Johnson), vendored in `libs/airwindows` with their LICENSE: Dynamics3 (compressor), TapeDelay2 (delays), StereoChorus (chorus), Galactic3 (reverb), Doublelay (doubler). The graphic EQ is our own (JUCE peak filters).
+AGPL-3.0 (JUCE is used under its AGPLv3 option). NeuralAmpModelerCore is MIT. The effects are Airwindows plugins (MIT, Chris Johnson), vendored in `libs/airwindows` with their LICENSE: Dynamics3 (compressor), TapeDelay2 (delays), StereoChorus (chorus), Galactic3 (the tank of the reverb and shimmer, `src/Shimmer.h`; the shimmer follows Danial Kooshki's MIT Shimmer-Reverb: octave-up in the feedback loop). The graphic EQ is our own (JUCE peak filters).

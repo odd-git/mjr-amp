@@ -352,7 +352,7 @@ struct Pedal : juce::ToggleButton
         for (int k = 0; k < fx.numKnobs(); ++k)
         {
             auto* knob = knobs.add(new LabeledKnob(params, juce::String(fx.id) + "K" + juce::String(k), fx.knobs[(size_t)k].name));
-            knob->knob.getProperties().set("pedal", !light()); // white caps on light pedals, black on dark ones
+            knob->knob.getProperties().set("pedal", false); // white caps on every pedal, like the compressor's
             knob->knob.setColour(juce::Slider::rotarySliderOutlineColourId, ink().withAlpha(0.7f));
             knob->label.setText(knob->label.getText().toLowerCase(), juce::dontSendNotification);
             knob->label.setColour(juce::Label::textColourId, ink());
@@ -606,10 +606,14 @@ public:
         : proc(p), ampAtt(*p.params.getParameter("ampOn"), [this](float) { repaint(); }),
           captureAtt(*p.params.getParameter("capture"), [this](float) { repaint(); }),
           modeAtt(*p.params.getParameter("ampMode"), [this](float) { repaint(); }),
-          jackAtt(*p.params.getParameter("jack"), [this](float) { repaint(); })
+          jackAtt(*p.params.getParameter("jack"), [this](float) { repaint(); }),
+          modelAtt(*p.params.getParameter("circuit"), [this](float) { repaint(); })
     {
 #if MJR_HAS_PHOTO
         photo = juce::ImageCache::getFromMemory(BinaryData::amp_png, BinaryData::amp_pngSize);
+        tolex[0] = recolour(photo, juce::Colour(0xffe4e0d4), 0.35f); // amp A: white
+        tolex[1] = recolour(photo, juce::Colour(0xff5c3822), 1.0f);  // amp B: brown
+        tolex[2] = photo;                                           // amp C and the captures: black, as photographed
 #endif
 #if MJR_HAS_CAB
         cabPhoto = juce::ImageCache::getFromMemory(BinaryData::cab_png, BinaryData::cab_pngSize);
@@ -632,8 +636,9 @@ public:
     {
         paintCab(g);
         const auto area = head();
-        if (headScaled.isValid())
-            g.drawImage(headScaled, area);
+        const int look = proc.circuitMode() ? ((juce::AudioParameterChoice*)proc.params.getParameter("circuit"))->getIndex() : 2;
+        if (headScaled[(size_t)look].isValid())
+            g.drawImage(headScaled[(size_t)look], area);
         else
             paintDrawnHead(g, area);
         paintPanelControls(g);
@@ -669,12 +674,41 @@ public:
     }
 
     // Photos resampled once per size (at the display's pixel density), not on every paint.
+    // The head's tolex in another colour: dark, neutral pixels outside the control panel take the colour,
+    // keeping their texture (scaled by `texture`); the gold panel, piping and logo stay as they are.
+    static juce::Image recolour(const juce::Image& src, juce::Colour c, float texture)
+    {
+        auto out = src.createCopy();
+        const juce::Image::BitmapData d(out, juce::Image::BitmapData::readWrite);
+        for (int y = 0; y < d.height; ++y)
+            for (int x = 0; x < d.width; ++x)
+            {
+                const float px = (float)x / (float)d.width * panelW, py = (float)y / (float)d.height * panelH;
+                if (px > 215 && px < 820 && py > 278 && py < 362)
+                    continue;
+                const auto p = d.getPixelColour(x, y);
+                if (p.getAlpha() == 0)
+                    continue;
+                const float l = 0.3f * p.getFloatRed() + 0.59f * p.getFloatGreen() + 0.11f * p.getFloatBlue();
+                const float warm = p.getFloatRed() - p.getFloatBlue();
+                const float w = juce::jlimit(0.0f, 1.0f, (0.5f - l) / 0.15f) * juce::jlimit(0.0f, 1.0f, (0.12f - warm) / 0.08f);
+                if (w <= 0)
+                    continue;
+                const float k = 1.0f - 0.35f * texture + 1.6f * texture * l;
+                const auto t = juce::Colour::fromFloatRGBA(std::min(1.0f, c.getFloatRed() * k), std::min(1.0f, c.getFloatGreen() * k),
+                                                           std::min(1.0f, c.getFloatBlue() * k), p.getFloatAlpha());
+                d.setPixelColour(x, y, p.interpolatedWith(t, w));
+            }
+        return out;
+    }
+
     void scalePhotos()
     {
         const float px = juce::Component::getApproximateScaleFactorForComponent(this);
         const auto area = head();
         if (photo.isValid())
-            headScaled = photo.rescaled(juce::roundToInt(area.getWidth() * px), juce::roundToInt(area.getHeight() * px), juce::Graphics::highResamplingQuality);
+            for (size_t i = 0; i < tolex.size(); ++i)
+                headScaled[i] = tolex[i].rescaled(juce::roundToInt(area.getWidth() * px), juce::roundToInt(area.getHeight() * px), juce::Graphics::highResamplingQuality);
         const auto cab = getLocalBounds().toFloat().withTop(area.getBottom()).reduced(14, 0);
         if (!cabPhoto.isValid() || cab.isEmpty())
             return;
@@ -919,9 +953,10 @@ private:
     }
 
     MJRAmpProcessor& proc;
-    juce::ParameterAttachment ampAtt, captureAtt, modeAtt, jackAtt;
+    juce::ParameterAttachment ampAtt, captureAtt, modeAtt, jackAtt, modelAtt;
     Hot hover = Hot::none;
-    juce::Image photo, cabPhoto, headScaled, cabScaled;
+    juce::Image photo, cabPhoto, cabScaled;
+    std::array<juce::Image, 3> tolex, headScaled; // amp A, B, C
     juce::OwnedArray<Knob> knobs;
     juce::Rectangle<float> band;
 };

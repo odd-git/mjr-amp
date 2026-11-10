@@ -2,6 +2,7 @@
 #include "../src/Processor.h"
 #include "../src/Pitch.h"
 #include "../src/CircuitAmp.h"
+#include "../src/Shimmer.h"
 #include <cstring>
 #include <iostream>
 
@@ -125,6 +126,58 @@ int main(int argc, char** argv)
             }
         std::cout << "amp A fingerprint: " << h << "\n";
         CHECK(h == AMP_A_FINGERPRINT, "amp A changed");
+    }
+
+    // R. Reverb and shimmer (src/Shimmer.h): wet level against the dry, and the octave climbing in the tail.
+    {
+        auto render = [&](bool shimmer, float amount, const std::vector<float>& in)
+        {
+            MjrVerb v(shimmer);
+            v.setSampleRate(48000);
+            const float knobs[] = { 0.7f, 0.8f, 0.5f, 0.3f, 1.0f, amount };
+            for (int k = 0; k < 6; ++k)
+                v.setParameter(k, knobs[k]);
+            std::vector<float> l = in, r = in;
+            for (size_t pos = 0; pos < l.size(); pos += 256)
+            {
+                float* ch[2] = { l.data() + pos, r.data() + pos };
+                v.processReplacing(ch, ch, (int)std::min<size_t>(256, l.size() - pos));
+            }
+            return l;
+        };
+        auto rms = [](const std::vector<float>& x, size_t from = 0)
+        {
+            double e = 0;
+            for (size_t i = from; i < x.size(); ++i)
+                e += (double)x[i] * x[i];
+            return std::sqrt(e / (double)(x.size() - from));
+        };
+        std::vector<float> guitar(di.getReadPointer(0), di.getReadPointer(0) + std::min(di.getNumSamples(), 48000 * 4));
+        const auto& reverbInfo = *std::find_if(std::begin(fxChain), std::end(fxChain), [](auto& f) { return std::string_view(f.id) == "reverb"; });
+        const double wetDb = juce::Decibels::gainToDecibels(rms(render(false, 0, guitar)) / rms(guitar));
+        std::cout << "reverb full wet vs dry: " << wetDb << " dB (wetGain " << reverbInfo.wetGain << ")\n";
+        CHECK(std::abs(wetDb + juce::Decibels::gainToDecibels((double)reverbInfo.wetGain)) < 3.0, "reverb wet level matches the dry");
+        // A 440 Hz note, then 3 s of tail: how much 880 Hz (and up) the tail holds against 440.
+        std::vector<float> note((size_t)48000 * 4, 0.0f);
+        for (int i = 0; i < 48000 / 3; ++i)
+            note[(size_t)i] = 0.3f * (float)std::sin(2 * juce::MathConstants<double>::pi * 440 * i / 48000);
+        auto octaveRatio = [&](const std::vector<float>& y)
+        {
+            auto tone = [&](double hz)
+            {
+                double c = 0, s2 = 0;
+                for (size_t i = 48000; i < y.size(); ++i)
+                    c += y[i] * std::cos(2 * juce::MathConstants<double>::pi * hz * (double)i / 48000),
+                    s2 += y[i] * std::sin(2 * juce::MathConstants<double>::pi * hz * (double)i / 48000);
+                return std::sqrt(c * c + s2 * s2);
+            };
+            return tone(880) / tone(440);
+        };
+        const double plain = octaveRatio(render(true, 0, note)), shim = octaveRatio(render(true, 0.8f, note));
+        std::cout << "shimmer: 880/440 Hz in the tail " << plain << " -> " << shim << "\n";
+        CHECK(shim > 3 * plain, "shimmer climbs an octave");
+        const auto loud = render(true, 1.0f, note);
+        CHECK(std::isfinite(rms(loud)) && rms(loud, loud.size() - 48000) < 1.0, "shimmer at full feedback stays bounded");
     }
 
     // C2. Circuit models A, B, C, whole amp: sines through it, level and distortion (residual after the fundamental).
@@ -527,12 +580,34 @@ int main(int argc, char** argv)
             if (boost.setFolder(juce::File::getSpecialLocation(juce::File::userMusicDirectory)
                                     .getChildFile("Music Production/NAM Profile/Pedals/Fortin 33")) > 0)
             {
-                boost.update(6.5f, 0, 0);
-                CHECK(boost.currentName().endsWith("65%") && std::abs(boost.outputDb()) < 1e-4f, "boost 6.5: " << boost.currentName() << " " << boost.outputDb());
-                boost.update(7.2f, 0, 0); // nearer 65% than 80%, and 0.7/1.5 of the way to 80%'s loudness
-                CHECK(boost.currentName().endsWith("65%") && boost.outputDb() > 1.0f && boost.outputDb() < 2.5f,
-                      "boost 7.2: " << boost.currentName() << " " << boost.outputDb() << " dB");
-                std::cout << "boost pedal: 7.2 -> " << boost.currentName() << " " << boost.outputDb() << " dB\n";
+                boost.update(10.0f, 0, 0);
+                CHECK(boost.currentName().endsWith("100%") && std::abs(boost.gainDb(10) - NamPedal::maxBoostDb) < 1e-3f, "boost 10: " << boost.gainDb(10));
+                boost.update(7.2f, 0, 0); // nearer 65% than 80%: between their gains
+                CHECK(boost.currentName().endsWith("65%") && boost.gainDb(7.2f) > boost.gainDb(6.5f) && boost.gainDb(7.2f) < boost.gainDb(8.0f),
+                      "boost 7.2: " << boost.currentName() << " " << boost.gainDb(7.2f) << " dB");
+                std::cout << "boost pedal gain: 3 " << boost.gainDb(3) << ", 5 " << boost.gainDb(5) << ", 6.5 " << boost.gainDb(6.5f)
+                          << ", 8 " << boost.gainDb(8) << ", 10 " << boost.gainDb(10) << " dB\n";
+                // Informative: each capture's own gain on the DI (output rms over input rms).
+                for (auto& f : boost.getFolder().findChildFiles(juce::File::findFiles, false, "*.nam"))
+                {
+                    auto m = nam::get_dsp(std::filesystem::path(f.getFullPathName().toStdString()));
+                    m->ResetAndPrewarm(48000, 512);
+                    std::vector<float> x(di.getReadPointer(0), di.getReadPointer(0) + di.getNumSamples()), y(x.size());
+                    for (size_t pos = 0; pos < x.size(); pos += 512)
+                    {
+                        float* in = x.data() + pos;
+                        float* out = y.data() + pos;
+                        m->process(&in, &out, (int)std::min<size_t>(512, x.size() - pos));
+                    }
+                    double ei = 0, eo = 0, pk = 0;
+                    for (size_t i = 0; i < x.size(); ++i)
+                        ei += (double)x[i] * x[i], eo += (double)y[i] * y[i], pk = std::max(pk, (double)std::abs(y[i]));
+                    const double gain = juce::Decibels::gainToDecibels(std::sqrt(eo / ei));
+                    const double loud = (double)juce::JSON::parse(f)["metadata"].getProperty("loudness", 0.0);
+                    std::cout << "boost capture " << f.getFileNameWithoutExtension() << ": gain " << gain << " dB, loudness " << loud
+                              << ", out peak " << juce::Decibels::gainToDecibels(pk) << " dBFS\n";
+                    CHECK(std::abs(gain - (loud + NamPedal::loudnessToGainDb)) < 1.0, "boost capture gain follows its loudness: " << f.getFileName());
+                }
             }
         }
         const auto off = render(nullptr);
@@ -693,6 +768,9 @@ int main(int argc, char** argv)
             setParam(p, "jack", 1.0f);
             save("circuit-ii.png"); // circuit mode: lead in input II
             setParam(p, "jack", 0.0f);
+            setParam(p, "circuit", 1.0f);
+            save("circuit-b.png"); // brown tolex
+            setParam(p, "circuit", 0.0f);
             setParam(p, "capture", (float)cap);
         }
         std::function<juce::Button*(juce::Component*, const juce::String&)> find = [&](juce::Component* c, const juce::String& text) -> juce::Button*

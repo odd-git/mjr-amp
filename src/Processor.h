@@ -17,15 +17,16 @@ struct Capture
 // Effect modules, in signal-chain order (same chain as Archetype: Plini X).
 // DSP comes from Airwindows (MIT, libs/airwindows); knob values are the plugin's own 0..1 parameters.
 class AudioEffect; // Airwindows base class, libs/airwindows/audioeffectx.h
-#define MJR_AIRWINDOWS(X) X(Dynamics3) X(TapeDelay2) X(StereoChorus) X(Galactic3) X(Doublelay)
+#define MJR_AIRWINDOWS(X) X(Dynamics3) X(TapeDelay2) X(StereoChorus) X(Reverb) X(Shimmer) // the last two: src/Shimmer.h
 #define MJR_DECLARE(name) AudioEffect* mjr_create_##name(void*);
 MJR_AIRWINDOWS(MJR_DECLARE)
 #undef MJR_DECLARE
 
 enum class FxStage { pre, eq, post };
 // Knob units: plain 0..1 (Airwindows' own scale, shown 0..10); ms = a delay time (see tapeDelayTime);
-// dB = our own gain after the effect (an Airwindows effect never sees it), or a band of our graphic EQ.
-enum class FxUnit { plain, ms, db };
+// dB = our own gain after the effect (an Airwindows effect never sees it), or a band of our graphic EQ;
+// mix = our own dry/wet (the effect outputs full wet): the dry stays whole up to half way, the wet comes in.
+enum class FxUnit { plain, ms, db, mix };
 struct FxKnob
 {
     const char* name;
@@ -41,6 +42,7 @@ struct FxInfo
     FxStage stage;
     AudioEffect* (*create)(void*); // nullptr: our own DSP (NAM pedals, graphic EQ)
     std::array<FxKnob, maxFxKnobs> knobs; // unused entries have a null name
+    float wetGain = 1.0f;                 // FxUnit::mix: level of the full-wet signal against the dry
     int numKnobs() const
     {
         int n = 0;
@@ -52,6 +54,7 @@ struct FxInfo
 // Graphic EQ bands (Hz), one octave apart; the knob names below match.
 inline constexpr float eqFreqs[9] = { 65, 125, 250, 500, 1000, 2000, 4000, 8000, 16000 };
 inline constexpr FxKnob eqBand(const char* name) { return { name, 0.0f, FxUnit::db, -12.0f, 12.0f }; }
+#define MJR_VERB_WET 4.3f // Galactic3 full wet is 12.6 dB below its input on a guitar DI (measured in the tests)
 inline constexpr FxKnob delayKnobs[6] = { { "TIME", 500.0f, FxUnit::ms, 80.0f, 1800.0f }, { "REPEATS", 0.4f }, { "TONE", 0.5f }, { "RESO", 0.0f }, { "FLUTTER", 0.1f }, { "MIX", 0.25f } };
 inline constexpr FxInfo fxChain[] = {
     { "comp", "Compressor", FxStage::pre, mjr_create_Dynamics3, { { { "THRESHOLD", 0.6f }, { "ATTACK", 0.382f }, { "RELEASE", 0.618f }, { "MIX", 1.0f }, { "LEVEL", 0.0f, FxUnit::db, -12.0f, 18.0f } } } },
@@ -64,10 +67,10 @@ inline constexpr FxInfo fxChain[] = {
       { eqBand("65 Hz"), eqBand("125 Hz"), eqBand("250 Hz"), eqBand("500 Hz"), eqBand("1 kHz"), eqBand("2 kHz"), eqBand("4 kHz"), eqBand("8 kHz"), eqBand("16 kHz") } },
     { "chorus", "Chorus", FxStage::post, mjr_create_StereoChorus, { { { "SPEED", 0.3f }, { "DEPTH", 0.4f } } } },
     { "postDelay", "Delay", FxStage::post, mjr_create_TapeDelay2, { delayKnobs[0], delayKnobs[1], delayKnobs[2], delayKnobs[3], delayKnobs[4], delayKnobs[5] } },
-    { "reverb", "Reverb", FxStage::post, mjr_create_Galactic3,
-      { { { "REPLACE", 0.5f }, { "BRIGHT", 0.5f }, { "DETUNE", 0.5f }, { "DEREZ", 1.0f }, { "SIZE", 0.6f }, { "MIX", 0.1f } } } },
-    { "doubler", "Doubler", FxStage::post, mjr_create_Doublelay,
-      { { { "DETUNE", 0.2f }, { "DELAY L", 0.1f }, { "DELAY R", 0.2f }, { "FEEDBACK", 0.0f }, { "MIX", 0.6f } } } },
+    { "reverb", "Reverb", FxStage::post, mjr_create_Reverb,
+      { { { "DECAY", 0.5f }, { "SIZE", 0.6f }, { "TONE", 0.5f }, { "MOD", 0.4f }, { "MIX", 0.25f, FxUnit::mix } } }, MJR_VERB_WET },
+    { "shimmer", "Shimmer", FxStage::post, mjr_create_Shimmer,
+      { { { "DECAY", 0.7f }, { "SIZE", 0.8f }, { "TONE", 0.5f }, { "MOD", 0.3f }, { "MIX", 0.3f, FxUnit::mix }, { "SHIMMER", 0.5f } } }, MJR_VERB_WET },
 };
 inline constexpr int numFx = (int)std::size(fxChain);
 
@@ -181,7 +184,9 @@ private:
     std::array<std::array<std::atomic<float>*, maxFxKnobs>, numFx> fxKnob {};
     std::array<std::unique_ptr<AudioEffect>, numFx> fx; // see Processor.cpp: deleted where AudioEffect is complete
     juce::AudioBuffer<float> fxScratch;                 // right channel for the mono pre/eq stages
+    juce::AudioBuffer<float> fxDry;                     // FxUnit::mix: the effect's input
     std::array<float, numFx> fxGain {};                 // last applied dB knob gain, ramped per block
+    std::array<float, numFx> fxWet {}, fxDryGain {};    // last applied mix gains (FxUnit::mix), ramped per block
     std::array<juce::dsp::IIR::Filter<float>, 9> graphicEq;
     std::array<float, 9> graphicEqDb {};
     double metroSamples = 0; // free-running position, in samples since the last beat

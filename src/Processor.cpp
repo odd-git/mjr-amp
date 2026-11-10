@@ -1,6 +1,10 @@
 #include "Processor.h"
 #include "BinaryData.h"
 #include "audioeffectx.h"
+#include "Shimmer.h"
+
+AudioEffect* mjr_create_Reverb(void*) { return new MjrVerb(false); }
+AudioEffect* mjr_create_Shimmer(void*) { return new MjrVerb(true); }
 
 namespace
 {
@@ -277,6 +281,8 @@ void MJRAmpProcessor::prepareToPlay(double sr, int maxBlock)
     dry.setSize(1, maxBlock);
     slotBuf.setSize(1, maxBlock);
     fxScratch.setSize(1, maxBlock);
+    fxDry.setSize(2, maxBlock);
+    fxWet.fill(-1.0f), fxDryGain.fill(-1.0f);
     fxGain.fill(1.0f);
     for (auto& f : graphicEq)
         f.prepare(spec), f.reset();
@@ -483,7 +489,7 @@ void MJRAmpProcessor::runFx(FxStage stage, juce::AudioBuffer<float>& buffer, int
         auto* effect = fx[i].get();
         if (effect == nullptr)
             continue;
-        float gainDb = 0; // our dB knobs (e.g. the compressor's makeup) act after the effect
+        float gainDb = 0, mix = -1; // our dB knobs (e.g. the compressor's makeup) act after the effect
         for (int k = 0; k < fxChain[i].numKnobs(); ++k)
         {
             const float v = fxKnob[i][(size_t)k]->load();
@@ -492,13 +498,28 @@ void MJRAmpProcessor::runFx(FxStage stage, juce::AudioBuffer<float>& buffer, int
                 case FxUnit::db: gainDb += v; break;
                 case FxUnit::ms: effect->setParameter(k, tapeDelayTime(v, sampleRate)); break;
                 case FxUnit::plain: effect->setParameter(k, v); break;
+                case FxUnit::mix: mix = v; break;
             }
         }
+        if (mix >= 0)
+            for (int c = 0; c < numChannels; ++c)
+                fxDry.copyFrom(c, 0, buffer, c, 0, n);
         // Airwindows is stereo; a mono stage feeds it the same signal twice and keeps the left side.
         if (numChannels < 2)
             fxScratch.copyFrom(0, 0, buffer, 0, 0, n);
         float* ch[2] = { buffer.getWritePointer(0), numChannels < 2 ? fxScratch.getWritePointer(0) : buffer.getWritePointer(1) };
         effect->processReplacing(ch, ch, n);
+        if (mix >= 0) // dry whole up to half way and the wet coming in, then the dry going out
+        {
+            const float wet = std::min(1.0f, 2.0f * mix) * fxChain[i].wetGain, dryG = std::min(1.0f, 2.0f * (1.0f - mix));
+            const float w0 = fxWet[i] < 0 ? wet : fxWet[i], d0 = fxDryGain[i] < 0 ? dryG : fxDryGain[i]; // first block: no ramp
+            for (int c = 0; c < numChannels; ++c)
+            {
+                buffer.applyGainRamp(c, 0, n, w0, wet);
+                buffer.addFromWithRamp(c, 0, fxDry.getReadPointer(c), n, d0, dryG);
+            }
+            fxWet[i] = wet, fxDryGain[i] = dryG;
+        }
         if (const float g = juce::Decibels::decibelsToGain(gainDb); g != 1.0f || fxGain[i] != 1.0f)
         {
             for (int c = 0; c < numChannels; ++c)
