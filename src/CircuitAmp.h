@@ -486,9 +486,12 @@ private:
 class Stage
 {
 public:
+    // clampRatio > 0: physical grid conduction. The grid is fed from a source resistance Rs and conducts with ~Rgk
+    // to the cathode, so a positive excursion u reaches the grid as u Rgk / (Rs + Rgk): pinned near 0 V.
     void build(const Triode& t, double bPlus, double rPlate, double rk, double ck, double rku, double fs,
-               double tauCharge = 0, double tauRecover = 0)
+               double tauCharge = 0, double tauRecover = 0, double clampRatio = 0)
     {
+        clamp = (float)clampRatio;
         rl = rPlate, rkb = rk, b = bPlus;
         iq = bisect(0, b / rl, [&](double i) { return t.ip(b - i * (rl + rk + rku), -i * (rk + rku)) - i; });
         vcq = iq * rk;
@@ -513,7 +516,7 @@ public:
         if (u > 0) // grid conduction: clamps, and charges the coupling cap upstream (if any)
         {
             shift -= u * charge;
-            u = u / (1.0f + u);
+            u = clamp > 0 ? u * clamp : u / (1.0f + u);
         }
         shift *= recover;
         current = lookup(u);
@@ -541,7 +544,7 @@ private:
     static constexpr double lo = -80.0, hi = 4.0;
     std::array<float, 4096> table {};
     double rl = 1, rkb = 0, b = 0, iq = 0, vcq = 0, vc = 0, dtc = 0;
-    float charge = 0, recover = 1, shift = 0, current = 0;
+    float charge = 0, recover = 1, shift = 0, current = 0, clamp = 0;
 };
 
 // Cathodyne: plate and cathode loads carry the same current, so one table gives both phases.
@@ -680,6 +683,7 @@ X(potTreble, 250e3) X(potBass, 1e6) X(potMid, 25e3) X(taperTreble, 0) X(taperBas
 X(potPresence, 5e3) X(cPresence, 0.68e-6) X(taperPresence, 0) X(rFeedTail, 470) \
 X(driverHpHz, 12.5) X(otLowHz, 6) X(otHighHz, 9000) \
 X(raa, 2500) X(turns, 12.5) X(supplyR, 40) X(supplyC, 187.5e-6 + 200e-6) \
+    X(v3Ecc83, 0) X(v2aGridPhys, 0) X(v2aRs, 500e3) X(v2aRgk, 1.5e3) X(v2aCc, 22e-9) X(v2aRleak, 1e6) \
     X(loadOn, 0) X(loadHz, 100) X(loadQ, 3) X(loadPeak, 4) X(loadLeR, 3) X(loadLeHz, 1500)
 struct CircuitAmpDesign
 {
@@ -723,10 +727,16 @@ public:
         const Triode ecc82 { d.ecc82Mu, circuit::ecc82.ex, d.ecc82Kg1, circuit::ecc82.kp, circuit::ecc82.kvb };
         v1Bright.build(ecc83, d.bV1, 100e3, d.rk1Bright, d.ck1Bright, 0, fs);
         v1Normal.build(ecc83, d.bV1, 100e3, d.rk1Normal, 250e-6, 0, fs);
-        v2a.build(ecc83, d.bV2a, 100e3, 470, 25e-6, 470, fs, d.v2aCharge, d.v2aRecover);
+        if (d.v2aGridPhys > 0.5) // grid current through Rs charges the coupling cap Cc (blocking), which leaks off via Rleak
+            v2a.build(ecc83, d.bV2a, 100e3, 470, 25e-6, 470, fs, d.v2aCc * (d.v2aRs + d.v2aRgk), d.v2aRleak * d.v2aCc,
+                      d.v2aRgk / (d.v2aRs + d.v2aRgk));
+        else
+            v2a.build(ecc83, d.bV2a, 100e3, 470, 25e-6, 470, fs, d.v2aCharge, d.v2aRecover);
         v2b.build(ecc83, d.bV2b, 100e3, 2.7e3, 100e3, fs);
         static const DriverPair pair = [] { DriverPair p; p.build(circuit::ecc82, 470, 47e3, 1.5e3); return p; }(); // ~0.3 s, once
-        if (d.bDriver == 470 && d.ecc82Mu == circuit::ecc82.mu && d.ecc82Kg1 == circuit::ecc82.kg1)
+        if (d.v3Ecc83 > 0.5) // V3 as a 12AX7, as some of these amps were fitted (the drawing says ECC82)
+            v3.build(ecc83, d.bDriver, 47e3, 1.5e3);
+        else if (d.bDriver == 470 && d.ecc82Mu == circuit::ecc82.mu && d.ecc82Kg1 == circuit::ecc82.kg1)
             v3 = pair;
         else
             v3.build(ecc82, d.bDriver, 47e3, 1.5e3);
@@ -811,6 +821,9 @@ public:
     double v1CathodeVolts() const { return v1Normal.cathodeVolts(); }
     double kt88IdleAmps() const { return idleCurrent; }
     float inputVolts = 4.4f; // DI full scale: an interface's instrument input clips around +12 dBu
+    // Probe hook (tools/render.cpp): each stage's output at the last oversampled step, in volts.
+    // V1 out, V2a grid, V2a plate, V2b grid, cathodyne plate, driver out, KT88 grid A, anode-to-anode.
+    std::array<float, 8> tap {};
 
 private:
     float sample(float di)
@@ -845,6 +858,7 @@ private:
         // Supply: the doubler's reservoir sags with the average current.
         bPlus += ((vNoLoad - bPlus) / design.supplyR - (i1 + i2 + 0.03)) / (design.supplyC * fs);
         speaker = otHigh(otLow((float)(-v / design.turns))); // the secondary is wired so the feedback is negative
+        tap = { (float)(jack == Jack::two ? p2 : p1), (float)(grid - vN), (float)plate, (float)toV2b, (float)ph1, (float)d1, g1, (float)v };
         return speaker * design.outputScale;
     }
 

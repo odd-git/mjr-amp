@@ -84,7 +84,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout(const std::vector
     l.add(std::make_unique<AudioParameterBool>(ParameterID { "ampOn", 1 }, "Amp On", true));
     l.add(std::make_unique<AudioParameterChoice>(ParameterID { "ampMode", 1 }, "Amp Model", StringArray { "Circuit", "Capture" }, 0));
     l.add(std::make_unique<AudioParameterChoice>(ParameterID { "jack", 1 }, "Input Jack", StringArray { "I", "II", "I+II" }, 0));
-    l.add(std::make_unique<AudioParameterChoice>(ParameterID { "circuit", 1 }, "Circuit", StringArray { "A", "B", "C" }, 0));
+    l.add(std::make_unique<AudioParameterChoice>(ParameterID { "circuit", 1 }, "Circuit", StringArray { "A", "B", "C", "D" }, 0));
     l.add(db("output", "Output", -24.0f, 12.0f, 0.0f));
 
     for (int s = 1; s <= MJRAmpProcessor::numIrSlots; ++s)
@@ -129,6 +129,18 @@ juce::AudioProcessorValueTreeState::ParameterLayout makeLayout(const std::vector
     return l;
 }
 } // namespace
+
+CircuitAmpFull::Design MJRAmpProcessor::fittedDesign()
+{
+    const auto f = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory).getChildFile("MJR Amp/fitted.json");
+    const auto job = juce::JSON::parse(f);
+    auto d = job["base"].toString() == "B" ? CircuitAmpFull::as1967 : CircuitAmpFull::lead1968;
+    if (const auto* params = job["params"].getDynamicObject())
+        for (const auto& p : params->getProperties())
+            if (!d.set(p.name.toString().toStdString(), (double)p.value))
+                DBG("fitted.json: unknown parameter " << p.name.toString());
+    return d;
+}
 
 MJRAmpProcessor::MJRAmpProcessor()
     : AudioProcessor(BusesProperties()
@@ -259,6 +271,7 @@ void MJRAmpProcessor::prepareToPlay(double sr, int maxBlock)
     circuit.prepare(sr, maxBlock);
     circuitB.prepare(sr, maxBlock);
     circuitC.prepare(sr, maxBlock);
+    circuitD.prepare(sr, maxBlock);
     for (auto& pedal : namPedals)
         pedal.prepare(sr, maxBlock);
     // ponytail: the larger of the two amp models' latencies, and the drive's resampler latency (host rate != 48k),
@@ -387,6 +400,7 @@ void MJRAmpProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
         {
             case 1: run(circuitB); break;
             case 2: run(circuitC); break;
+            case 3: run(circuitD); break;
             default: run(circuit); break;
         }
     }

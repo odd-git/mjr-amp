@@ -4,7 +4,7 @@
 //   { "base": "B" | "C", "params": { name: value, ... },          (CircuitAmpDesign's fields; base defaults to B)
 //     "renders": [ { "in": path, "out": path, "nam": path }                                  (a capture)
 //                | { "in": path, "out": path, "knobs": { presence, bass, middle, treble, volume1, volume2 },
-//                    "channel": "I" | "II" | "JU" } ] }                                      (the circuit)
+//                    "channel": "I" | "II" | "JU", "taps": path (optional: stage voltages, 8 floats per sample) } ] }
 #include "../src/CircuitAmp.h"
 #include <NAM/get_dsp.h>
 #include <atomic>
@@ -81,8 +81,21 @@ static void renderOne(const juce::var& r, const CircuitAmpFull::Design& design)
         a.prepare(48000, block);
         a.setControls((float)k["presence"], (float)k["bass"], (float)k["middle"], (float)k["treble"], (float)k["volume1"],
                       (float)k["volume2"], ch == "JU" ? J::jumped : ch == "II" ? J::two : J::one);
-        for (int pos = 0; pos < n; pos += block)
-            a.process(x.data() + pos, std::min(block, n - pos));
+        if (r.hasProperty("taps")) // one sample at a time, so every output sample gets the stages' values
+        {
+            std::vector<float> t;
+            t.reserve(x.size() * 8);
+            for (auto& v : x)
+            {
+                a.process(&v, 1);
+                t.insert(t.end(), a.tap.begin(), a.tap.end());
+            }
+            if (!juce::File::getCurrentWorkingDirectory().getChildFile(r["taps"].toString()).replaceWithData(t.data(), t.size() * sizeof(float)))
+                throw std::runtime_error("cannot write " + r["taps"].toString().toStdString());
+        }
+        else
+            for (int pos = 0; pos < n; pos += block)
+                a.process(x.data() + pos, std::min(block, n - pos));
     }
     if (!juce::File::getCurrentWorkingDirectory().getChildFile(r["out"].toString()).replaceWithData(x.data(), x.size() * sizeof(float)))
         throw std::runtime_error("cannot write " + r["out"].toString().toStdString());

@@ -160,6 +160,10 @@ private:
     NamEngine engine;
     CircuitAmp circuit; // amp A
     CircuitAmpFull circuitB { CircuitAmpFull::as1967 }, circuitC { CircuitAmpFull::lead1968 };
+    // Amp D: amp C with the parameters fitted to the captures by nam-twin, read from fitted.json in the user's app
+    // data folder ({"base": "B"|"C", "params": {name: value}}). Without the file it plays as C.
+    static CircuitAmpFull::Design fittedDesign();
+    CircuitAmpFull circuitD { fittedDesign() };
     juce::File libraryDir;
     std::atomic<int> loadedCapture { -1 };
     std::array<std::atomic<float>, 6> baseline {}; // knob values the active capture was recorded with

@@ -636,7 +636,7 @@ public:
     {
         paintCab(g);
         const auto area = head();
-        const int look = proc.circuitMode() ? ((juce::AudioParameterChoice*)proc.params.getParameter("circuit"))->getIndex() : 2;
+        const int look = proc.circuitMode() ? std::min(2, ((juce::AudioParameterChoice*)proc.params.getParameter("circuit"))->getIndex()) : 2; // D wears C's tolex
         if (headScaled[(size_t)look].isValid())
             g.drawImage(headScaled[(size_t)look], area);
         else
@@ -1452,8 +1452,9 @@ public:
             };
         }
         const char* modelTips[] = { "Amp A: clean voicing", "Amp B: the 1967 circuit, as drawn",
-                                    "Amp C: 1967 with the 1968 lead mods (100k feedback, -70 V bias, hotter input)" };
-        for (int i = 0; i < 3; ++i)
+                                    "Amp C: 1967 with the 1968 lead mods (100k feedback, -70 V bias, hotter input)",
+                                    "Amp D: amp C fitted to the captures (fitted.json in the app data folder)" };
+        for (int i = 0; i < 4; ++i)
         {
             auto& b = modelButtons[(size_t)i];
             b.setButtonText(juce::String::charToString((juce::juce_wchar)('A' + i)));
@@ -1599,8 +1600,8 @@ private:
 
         circuitButton.setBounds(586, 122, 100, 24); // where the CAPTURE heading was: the buttons name the section
         captureButton.setBounds(686, 122, 100, 24);
-        for (int i = 0; i < 3; ++i) // circuit A / B / C, in the capture menu's place
-            modelButtons[(size_t)i].setBounds(611 + 50 * i, 88, 50, 30);
+        for (int i = 0; i < 4; ++i) // circuit A / B / C / D, in the capture menu's place
+            modelButtons[(size_t)i].setBounds(611 + 40 * i, 88, 40, 30);
         prevCapture.setBounds(468, 88, 32, 34);
         capture.setBounds(506, 88, 360, 34);
         nextCapture.setBounds(872, 88, 32, 34);
@@ -1656,7 +1657,7 @@ private:
         const bool circuit = shownCircuit = p.circuitMode();
         shownJack = jackIndex();
         shownModel = modelIndex();
-        for (int i = 0; i < 3; ++i)
+        for (int i = 0; i < 4; ++i)
             modelButtons[(size_t)i].setVisible(circuit), modelButtons[(size_t)i].setToggleState(i == shownModel, juce::dontSendNotification);
         (circuit ? circuitButton : captureButton).setToggleState(true, juce::dontSendNotification);
         for (juce::Component* c : { (juce::Component*)&prevCapture, (juce::Component*)&capture, (juce::Component*)&nextCapture,
@@ -1774,7 +1775,7 @@ private:
     std::vector<int> order;
     juce::ComboBox capture;
     juce::TextButton prevCapture, nextCapture, resetKnobs, circuitButton, captureButton;
-    std::array<juce::TextButton, 3> modelButtons;
+    std::array<juce::TextButton, 4> modelButtons;
     IconButton preNav { "PRE FX", IconButton::pedal }, ampNav { "AMP", IconButton::amp }, eqNav { "EQ", IconButton::eq },
         postNav { "POST FX", IconButton::pedal };
     FxPage prePage { p, FxStage::pre, "INPUT", "AMP" }, eqPage { p, FxStage::eq, "AMP", "CAB" },
