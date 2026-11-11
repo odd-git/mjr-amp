@@ -82,3 +82,11 @@ add_executable(mjr-test tests/test.cpp)
 target_link_libraries(mjr-test PRIVATE MJRAmp)
 target_include_directories(mjr-test PRIVATE $<TARGET_PROPERTY:MJRAmp,INCLUDE_DIRECTORIES>)
 target_compile_definitions(mjr-test PRIVATE $<TARGET_PROPERTY:MJRAmp,COMPILE_DEFINITIONS>)
+
+# --- Offline renderer for the fitter: mjr-render <job.json>
+add_executable(mjr-render tools/render.cpp)
+target_link_libraries(mjr-render PRIVATE MJRAmp)
+target_include_directories(mjr-render PRIVATE $<TARGET_PROPERTY:MJRAmp,INCLUDE_DIRECTORIES>)
+target_compile_definitions(mjr-render PRIVATE $<TARGET_PROPERTY:MJRAmp,COMPILE_DEFINITIONS>)
+# FMA contraction depends on what gets inlined where: off here, so the fingerprints depend on the source only.
+target_compile_options(mjr-render PRIVATE $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-ffp-contract=off>)

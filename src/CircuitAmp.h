@@ -452,6 +452,35 @@ double bisect(double lo, double hi, F f) // f(lo) > 0 > f(hi)
     return 0.5 * (lo + hi);
 }
 
+// A loudspeaker's impedance, normalised to its voice-coil resistance: 1 + a parallel RLC at the cone's
+// resonance (peak = its height above 1, q = its sharpness) + the voice coil's inductance (Le || leR, rising
+// above leHz). Current in, voltage out; split into the part that depends on this sample's current (gain)
+// and the part already known (state), so the output stage's Newton solve can include it.
+struct SpeakerLoad
+{
+    void set(double hz, double q, double peak, double leR, double leHz, double fs)
+    {
+        const double k = 2 * fs, w0 = 2 * juce::MathConstants<double>::pi * hz, l = peak / (q * w0), c = q / (peak * w0);
+        const double a = 1 + l / peak * k + l * c * k * k; // zres(s) = s l / (1 + s l/peak + s^2 l c)
+        b0 = l * k / a, b1 = 0, b2 = -l * k / a, a1 = (2 - 2 * l * c * k * k) / a, a2 = (1 - l / peak * k + l * c * k * k) / a;
+        const double wc = 2 * juce::MathConstants<double>::pi * leHz, e = 1 + k / wc; // zle(s) = leR (s/wc) / (1 + s/wc)
+        c0 = leR * k / wc / e, c1 = -leR * k / wc / e, ca1 = (1 - k / wc) / e;
+        s1 = s2 = t = 0;
+    }
+    double gain() const { return 1 + b0 + c0; }
+    double state() const { return s1 + t; }
+    void push(double x) // after the solve: advance with the sample's current
+    {
+        const double y = b0 * x + s1;
+        s1 = b1 * x - a1 * y + s2, s2 = b2 * x - a2 * y;
+        const double u = c0 * x + t;
+        t = c1 * x - ca1 * u;
+    }
+
+private:
+    double b0 = 0, b1 = 0, b2 = 0, a1 = 0, a2 = 0, s1 = 0, s2 = 0, c0 = 0, c1 = 0, ca1 = 0, t = 0;
+};
+
 // Common-cathode stage with its cathode bypass cap as state (so the bypass is exact, not a shelf):
 // plate current tabulated against grid minus cap voltage; the unbypassed part degenerates in the table.
 class Stage
@@ -650,7 +679,8 @@ X(cTreble, 500e-12) X(rSlope, 33e3) X(cBass, 22e-9) X(cMid, 22e-9) X(cToneOut, 2
 X(potTreble, 250e3) X(potBass, 1e6) X(potMid, 25e3) X(taperTreble, 0) X(taperBass, 2) X(taperMid, 0) \
 X(potPresence, 5e3) X(cPresence, 0.68e-6) X(taperPresence, 0) X(rFeedTail, 470) \
 X(driverHpHz, 12.5) X(otLowHz, 6) X(otHighHz, 9000) \
-X(raa, 2500) X(turns, 12.5) X(supplyR, 40) X(supplyC, 187.5e-6 + 200e-6)
+X(raa, 2500) X(turns, 12.5) X(supplyR, 40) X(supplyC, 187.5e-6 + 200e-6) \
+    X(loadOn, 0) X(loadHz, 100) X(loadQ, 3) X(loadPeak, 4) X(loadLeR, 3) X(loadLeHz, 1500)
 struct CircuitAmpDesign
 {
     double feedbackR, biasVolts;
@@ -709,6 +739,7 @@ public:
         otLow.highPass(d.otLowHz, fs), otHigh.lowPass(d.otHighHz, fs);
         knobs.fill(-1);
         vAA = 0, speaker = 0, bPlus = d.bPower;
+        load.set(d.loadHz, d.loadQ, d.loadPeak, d.loadLeR, d.loadLeHz, fs);
         iIdle = 4 * idleCurrent;
         vNoLoad = d.bPower + d.supplyR * (iIdle + 0.03);
     }
@@ -797,13 +828,19 @@ private:
         const float g1 = gridA.process(d1), g2 = gridB.process(d2);
         // Push-pull through an ideal transformer: v = Raa (I1 - I2), two KT88s per side. Newton on v.
         double v = vAA, i1 = 0, i2 = 0;
+        // Resistive load (amps B, C): v = Raa (I1 - I2). With the speaker (loadOn): v = Raa z(I1 - I2).
+        const bool spk = design.loadOn > 0.5;
+        const double zg = spk ? load.gain() : 1.0, zs = spk ? load.state() : 0.0;
         for (int it = 0; it < 4; ++it)
         {
             double s1, s2;
             i1 = 2 * kt88At(g1, bPlus - 0.5 * v, s1), i2 = 2 * kt88At(g2, bPlus + 0.5 * v, s2);
-            const double f = v - design.raa * (i1 - i2), df = 1 + design.raa * (s1 + s2); // s = dI/dVp of one tube; x2 tubes, x0.5
+            const double f = spk ? v - design.raa * (zg * (i1 - i2) + zs) : v - design.raa * (i1 - i2);
+            const double df = 1 + design.raa * zg * (s1 + s2); // s = dI/dVp of one tube; x2 tubes, x0.5
             v -= f / df;
         }
+        if (spk)
+            load.push(i1 - i2);
         vAA = v = juce::jlimit(-2.0 * bPlus, 2.0 * bPlus, v);
         // Supply: the doubler's reservoir sags with the average current.
         bPlus += ((vNoLoad - bPlus) / design.supplyR - (i1 + i2 + 0.03)) / (design.supplyC * fs);
@@ -850,6 +887,7 @@ private:
     circuit::Network<8, 4> tone;
     circuit::Network<2, 1> presence;
     circuit::OnePole hp1, hp2, otLow, otHigh;
+    circuit::SpeakerLoad load;
     std::vector<std::vector<float>> kt = std::vector<std::vector<float>>(ktN, std::vector<float>(ktN));
     std::array<float, 6> knobs {};
     double rSrc1 = 38e3, rSrc2 = 38e3, rSrcTone = 38e3, vAA = 0, bPlus = 590, vNoLoad = 600, iIdle = 0, idleCurrent = 0;
