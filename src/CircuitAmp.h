@@ -509,6 +509,8 @@ public:
     double plateVolts() const { return b - current * rl; }
     double cathodeVolts() const { return vc; } // the bypassed part (what a meter reads with no signal)
     double outputResistance(const Triode& t) const { return 1.0 / (1.0 / rl + 1.0 / platePlateResistance(t)); }
+    // Small-signal gain magnitude at the bias point (the grid sits -vcq from the bypassed cathode).
+    double gain() const { return (lookup((float)-vcq + 0.01f) - lookup((float)-vcq - 0.01f)) / 0.02 * rl; }
     // Grid voltage (AC, grid DC at ground) -> plate swing around the quiescent plate voltage.
     float process(float vg)
     {
@@ -683,7 +685,7 @@ X(potTreble, 250e3) X(potBass, 1e6) X(potMid, 25e3) X(taperTreble, 0) X(taperBas
 X(potPresence, 5e3) X(cPresence, 0.68e-6) X(taperPresence, 0) X(rFeedTail, 470) \
 X(driverHpHz, 12.5) X(otLowHz, 6) X(otHighHz, 9000) \
 X(raa, 2500) X(turns, 12.5) X(supplyR, 40) X(supplyC, 187.5e-6 + 200e-6) \
-    X(v3Ecc83, 0) X(v2aGridPhys, 0) X(v2aRs, 500e3) X(v2aRgk, 1.5e3) X(v2aCc, 22e-9) X(v2aRleak, 1e6) X(v2aCk, 25e-6) \
+    X(v3Ecc83, 0) X(v2aGridPhys, 0) X(v2aRs, 500e3) X(v2aRgk, 1.5e3) X(v2aCc, 22e-9) X(v2aRleak, 1e6) X(v2aCk, 25e-6) X(millerOn, 1) \
     X(loadOn, 0) X(loadHz, 100) X(loadQ, 3) X(loadPeak, 4) X(loadLeR, 3) X(loadLeHz, 1500)
 struct CircuitAmpDesign
 {
@@ -779,6 +781,9 @@ public:
             volume.c(0, 0, 6, d.cCouple1, fs), volume.c(1, 1, 3, d.cCouple2, fs);
             volume.r(3, 4, (1 - a) * d.potVol2), volume.r(4, -1, a * d.potVol2), volume.r(4, 2, d.rMix);
             volume.r(6, 5, (1 - b) * d.potVol1), volume.r(5, -1, b * d.potVol1), volume.r(2, 5, d.rMix), volume.c(2, 2, 5, d.cMixBright, fs);
+            // V2a's input capacitance (ECC83 data: Cgk 1.6 pF, Cga 1.7 pF times 1 + gain, the Miller effect): with the
+            // mixing resistors and pots it rolls the top off before the stage that clips hardest.
+            volume.c(3, 2, -1, d.millerOn > 0.5 ? 1.6e-12 + 1.7e-12 * (1 + v2a.gain()) : 1e-15, fs);
             volume.end();
         }
         if (toneMoved)
@@ -897,7 +902,7 @@ private:
     circuit::Cathodyne v2b;
     circuit::DriverPair v3;
     circuit::GridFeed gridA, gridB;
-    circuit::Network<7, 3> volume;
+    circuit::Network<7, 4> volume;
     circuit::Network<8, 4> tone;
     circuit::Network<2, 1> presence;
     circuit::OnePole hp1, hp2, otLow, otHigh;
