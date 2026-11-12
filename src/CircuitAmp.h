@@ -683,7 +683,7 @@ X(potTreble, 250e3) X(potBass, 1e6) X(potMid, 25e3) X(taperTreble, 0) X(taperBas
 X(potPresence, 5e3) X(cPresence, 0.68e-6) X(taperPresence, 0) X(rFeedTail, 470) \
 X(driverHpHz, 12.5) X(otLowHz, 6) X(otHighHz, 9000) \
 X(raa, 2500) X(turns, 12.5) X(supplyR, 40) X(supplyC, 187.5e-6 + 200e-6) \
-    X(v3Ecc83, 0) X(v2aGridPhys, 0) X(v2aRs, 500e3) X(v2aRgk, 1.5e3) X(v2aCc, 22e-9) X(v2aRleak, 1e6) \
+    X(v3Ecc83, 0) X(v2aGridPhys, 0) X(v2aRs, 500e3) X(v2aRgk, 1.5e3) X(v2aCc, 22e-9) X(v2aRleak, 1e6) X(v2aCk, 25e-6) \
     X(loadOn, 0) X(loadHz, 100) X(loadQ, 3) X(loadPeak, 4) X(loadLeR, 3) X(loadLeHz, 1500)
 struct CircuitAmpDesign
 {
@@ -728,10 +728,10 @@ public:
         v1Bright.build(ecc83, d.bV1, 100e3, d.rk1Bright, d.ck1Bright, 0, fs);
         v1Normal.build(ecc83, d.bV1, 100e3, d.rk1Normal, 250e-6, 0, fs);
         if (d.v2aGridPhys > 0.5) // grid current through Rs charges the coupling cap Cc (blocking), which leaks off via Rleak
-            v2a.build(ecc83, d.bV2a, 100e3, 470, 25e-6, 470, fs, d.v2aCc * (d.v2aRs + d.v2aRgk), d.v2aRleak * d.v2aCc,
+            v2a.build(ecc83, d.bV2a, 100e3, 470, d.v2aCk, 470, fs, d.v2aCc * (d.v2aRs + d.v2aRgk), d.v2aRleak * d.v2aCc,
                       d.v2aRgk / (d.v2aRs + d.v2aRgk));
         else
-            v2a.build(ecc83, d.bV2a, 100e3, 470, 25e-6, 470, fs, d.v2aCharge, d.v2aRecover);
+            v2a.build(ecc83, d.bV2a, 100e3, 470, d.v2aCk, 470, fs, d.v2aCharge, d.v2aRecover);
         v2b.build(ecc83, d.bV2b, 100e3, 2.7e3, 100e3, fs);
         static const DriverPair pair = [] { DriverPair p; p.build(circuit::ecc82, 470, 47e3, 1.5e3); return p; }(); // ~0.3 s, once
         if (d.v3Ecc83 > 0.5) // V3 as a 12AX7, as some of these amps were fitted (the drawing says ECC82)
