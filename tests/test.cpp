@@ -7,6 +7,11 @@
 #include <cstring>
 #include <iostream>
 
+// The pedal checks against captures run when these point at folders of captures named "... Drive 7 Tone 7 Level 9.nam"
+// (overdrive) and "... 65%.nam" (boost); otherwise they are skipped.
+static juce::File envDir(const char* name) { const char* e = std::getenv(name); return e ? juce::File(e) : juce::File(); }
+static const juce::File overdriveCaptures = envDir("MJR_OVERDRIVE_CAPTURES"), boostCaptures = envDir("MJR_BOOST_CAPTURES");
+
 constexpr std::uint64_t AMP_A_FINGERPRINT = 13822775965762470258ull; // amp A as of 9cbd6f7, frozen (x86-64 AVX2 build)
 
 static int failures = 0;
@@ -55,6 +60,59 @@ int main(int argc, char** argv)
             t->scanForDevices();
             std::cout << t->getTypeName() << "\n  in:  " << t->getDeviceNames(true).joinIntoString(" | ")
                       << "\n  out: " << t->getDeviceNames(false).joinIntoString(" | ") << "\n";
+        }
+        return 0;
+    }
+    if (argc > 2 && juce::String(argv[1]) == "--shimmer-probe") // TEMPORARY
+    {
+        juce::AudioFormatManager fm;
+        fm.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> rd(fm.createReaderFor(juce::File(argv[2])));
+        juce::AudioBuffer<float> in(1, (int)rd->lengthInSamples);
+        rd->read(&in, 0, (int)rd->lengthInSamples, 0, true, false);
+        auto run = [&](float amount)
+        {
+            MjrVerb v(true);
+            v.setSampleRate(48000);
+            const float knobs[] = { 0.7f, 0.8f, 0.5f, 0.3f, 0.3f, amount };
+            for (int k = 0; k < 6; ++k)
+                v.setParameter(k, knobs[k]);
+            std::vector<float> l(in.getReadPointer(0), in.getReadPointer(0) + in.getNumSamples()), r = l;
+            l.resize(l.size() + 48000 * 2, 0.0f), r.resize(l.size(), 0.0f);
+            for (size_t pos = 0; pos < l.size(); pos += 128)
+            {
+                float* ch[2] = { l.data() + pos, r.data() + pos };
+                v.processReplacing(ch, ch, (int)std::min<size_t>(128, l.size() - pos));
+            }
+            return l;
+        };
+        auto band = [](const std::vector<float>& a, const std::vector<float>& b, double lo, double hi)
+        {
+            juce::dsp::FFT fft(13);
+            const int len = 1 << 13;
+            double ea = 0, eb = 0;
+            std::vector<float> fa((size_t)len * 2), fb((size_t)len * 2);
+            for (size_t pos = 0; pos + (size_t)len <= a.size(); pos += (size_t)len / 2)
+            {
+                for (int i = 0; i < len; ++i)
+                {
+                    const float w = (float)(0.5 - 0.5 * std::cos(2 * juce::MathConstants<double>::pi * i / len));
+                    fa[(size_t)i] = a[pos + (size_t)i] * w, fb[(size_t)i] = b[pos + (size_t)i] * w;
+                }
+                std::fill(fa.begin() + len, fa.end(), 0.0f), std::fill(fb.begin() + len, fb.end(), 0.0f);
+                fft.performFrequencyOnlyForwardTransform(fa.data()), fft.performFrequencyOnlyForwardTransform(fb.data());
+                for (int i = 0; i < len / 2; ++i)
+                    if (const double f = i * 48000.0 / len; f >= lo && f < hi)
+                        ea += (double)fa[(size_t)i] * fa[(size_t)i], eb += (double)fb[(size_t)i] * fb[(size_t)i];
+            }
+            return 10 * std::log10((eb + 1e-30) / (ea + 1e-30));
+        };
+        const auto base = run(0.0f);
+        for (float amount : { 0.5f, 1.0f })
+        {
+            const auto y = run(amount);
+            std::cout << "shimmer " << amount << " vs 0, band energy change (dB): 80-300 " << band(base, y, 80, 300) << ", 300-1k "
+                      << band(base, y, 300, 1000) << ", 1k-3k " << band(base, y, 1000, 3000) << ", 3k-8k " << band(base, y, 3000, 8000) << "\n";
         }
         return 0;
     }
@@ -177,6 +235,17 @@ int main(int argc, char** argv)
         const double plain = octaveRatio(render(true, 0, note)), shim = octaveRatio(render(true, 0.8f, note));
         std::cout << "shimmer: 880/440 Hz in the tail " << plain << " -> " << shim << "\n";
         CHECK(shim > 3 * plain, "shimmer climbs an octave");
+        // On a real guitar at the default settings the shimmer must be heard: the signal it adds to the
+        // plain reverb is within 10 dB of that reverb's own level.
+        {
+            const auto off = render(true, 0.0f, guitar), on = render(true, 0.5f, guitar);
+            std::vector<float> diff(off.size());
+            for (size_t i = 0; i < diff.size(); ++i)
+                diff[i] = on[i] - off[i];
+            const double added = juce::Decibels::gainToDecibels(rms(diff) / rms(off));
+            std::cout << "shimmer 0.5 on the DI: added signal " << added << " dB against the plain reverb\n";
+            CHECK(added > -10.0, "shimmer is audible at the default setting (" << added << " dB)");
+        }
         const auto loud = render(true, 1.0f, note);
         CHECK(std::isfinite(rms(loud)) && rms(loud, loud.size() - 48000) < 1.0, "shimmer at full feedback stays bounded");
     }
@@ -329,18 +398,18 @@ int main(int argc, char** argv)
     };
     {
         auto pedal = [&](float drive, float tone, float level, int period, float amp)
-        { return measurePedal(CircuitTS9(), drive, tone, level, period, amp); };
+        { return measurePedal(CircuitOverdrive(), drive, tone, level, period, amp); };
         const double mid = pedal(0, 5, 10, 64, 0.001f).rms, low = pedal(0, 5, 10, 480, 0.001f).rms;
-        std::cout << "ts9 drive 0, level 10: gain 750 Hz " << juce::Decibels::gainToDecibels(mid) << " dB, 100 Hz "
+        std::cout << "overdrive drive 0, level 10: gain 750 Hz " << juce::Decibels::gainToDecibels(mid) << " dB, 100 Hz "
                   << juce::Decibels::gainToDecibels(low) << " dB\n";
-        CHECK(mid > 2 * low, "ts9 mid hump");
+        CHECK(mid > 2 * low, "overdrive mid hump");
         double lastThd = -1, lastCrest = 10;
         for (float d : { 0.0f, 3.0f, 5.0f, 7.0f, 10.0f })
         {
             const auto r = pedal(d, 5, 5, 220, 0.1f);
-            std::cout << "ts9 drive " << d << ": gain " << juce::Decibels::gainToDecibels(r.rms) << " dB, thd " << r.thd * 100 << "%, crest " << r.crest << "\n";
-            CHECK(r.rms > 0, "ts9 finite at drive " << d);
-            CHECK(r.thd >= lastThd * 0.95 || r.crest <= lastCrest * 1.02, "ts9 distortion grows with drive (" << d << ")");
+            std::cout << "overdrive drive " << d << ": gain " << juce::Decibels::gainToDecibels(r.rms) << " dB, thd " << r.thd * 100 << "%, crest " << r.crest << "\n";
+            CHECK(r.rms > 0, "overdrive finite at drive " << d);
+            CHECK(r.thd >= lastThd * 0.95 || r.crest <= lastCrest * 1.02, "overdrive distortion grows with drive (" << d << ")");
             lastThd = r.thd, lastCrest = r.crest;
         }
         auto tilt = [&](float tone, float level) { return pedal(0, tone, level, 16, 0.001f).rms / pedal(0, tone, level, 240, 0.001f).rms; };
@@ -348,15 +417,15 @@ int main(int argc, char** argv)
         for (float t : { 0.0f, 5.0f, 10.0f })
         {
             const double v = tilt(t, 5);
-            std::cout << "ts9 tone " << t << ": 3 kHz/200 Hz " << v << "\n";
-            CHECK(v > lastT * 1.1, "ts9 tone raises highs (" << t << ")");
+            std::cout << "overdrive tone " << t << ": 3 kHz/200 Hz " << v << "\n";
+            CHECK(v > lastT * 1.1, "overdrive tone raises highs (" << t << ")");
             lastT = v;
         }
-        CHECK(pedal(0, 5, 3, 220, 0.001f).rms < pedal(0, 5, 7, 220, 0.001f).rms, "ts9 level raises the output");
-        CHECK(std::abs(tilt(5, 3) / tilt(5, 7) - 1) < 0.01, "ts9 level leaves the timbre alone");
+        CHECK(pedal(0, 5, 3, 220, 0.001f).rms < pedal(0, 5, 7, 220, 0.001f).rms, "overdrive level raises the output");
+        CHECK(std::abs(tilt(5, 3) / tilt(5, 7) - 1) < 0.01, "overdrive level leaves the timbre alone");
         for (float k : { 0.0f, 10.0f })
         {
-            CircuitTS9 p;
+            CircuitOverdrive p;
             const int n = 48000;
             p.prepare(48000, n);
             p.setKnobs(k, k, 10);
@@ -367,30 +436,30 @@ int main(int argc, char** argv)
             float tail = 0;
             for (float v : x)
                 tail = std::isfinite(v) ? std::max(tail, std::abs(v)) : 1e9f;
-            CHECK(tail < 1e-4f, "ts9 stable at drive/tone " << k << " (" << tail << ")");
+            CHECK(tail < 1e-4f, "overdrive stable at drive/tone " << k << " (" << tail << ")");
         }
     }
 
     {
         // Boost: the gain the schematic gives (+22.3 dB at 1 kHz, +3.7 dB at 100 Hz, full Level), less the 2 dB
         // between its full scales (+20.3 / +1.7 dB digital).
-        auto boost = [&](float level, int period, float amp) { return measurePedal(CircuitFortin33(), level, 0, 0, period, amp); };
+        auto boost = [&](float level, int period, float amp) { return measurePedal(CircuitBoost(), level, 0, 0, period, amp); };
         const double g1k = juce::Decibels::gainToDecibels(boost(10, 48, 0.01f).rms), g100 = juce::Decibels::gainToDecibels(boost(10, 480, 0.01f).rms);
-        std::cout << "fortin33 full level: 1 kHz " << g1k << " dB, 100 Hz " << g100 << " dB\n";
-        CHECK(std::abs(g1k - 20.3) < 1 && std::abs(g100 - 1.7) < 1.5, "fortin33 gain as the schematic");
+        std::cout << "boost full level: 1 kHz " << g1k << " dB, 100 Hz " << g100 << " dB\n";
+        CHECK(std::abs(g1k - 20.3) < 1 && std::abs(g100 - 1.7) < 1.5, "boost gain as the schematic");
         double last = 0;
         for (float l : { 2.0f, 5.0f, 8.0f, 10.0f })
         {
             const auto r = boost(l, 220, 0.02f);
-            std::cout << "fortin33 level " << l << ": gain " << juce::Decibels::gainToDecibels(r.rms) << " dB, thd " << r.thd * 100 << "%\n";
-            CHECK(r.rms > last, "fortin33 level raises the output (" << l << ")");
-            CHECK(r.thd < 0.01, "fortin33 clean at 40 mV (" << l << ")");
+            std::cout << "boost level " << l << ": gain " << juce::Decibels::gainToDecibels(r.rms) << " dB, thd " << r.thd * 100 << "%\n";
+            CHECK(r.rms > last, "boost level raises the output (" << l << ")");
+            CHECK(r.thd < 0.01, "boost clean at 40 mV (" << l << ")");
             last = r.rms;
         }
         const auto hot = boost(10, 220, 0.8f);
-        std::cout << "fortin33 1.6 V in: thd " << hot.thd * 100 << "%, crest " << hot.crest << "\n";
-        CHECK(hot.rms > 0 && hot.thd > 0.02, "fortin33 saturates at the rails with a hot input");
-        CircuitFortin33 p;
+        std::cout << "boost 1.6 V in: thd " << hot.thd * 100 << "%, crest " << hot.crest << "\n";
+        CHECK(hot.rms > 0 && hot.thd > 0.02, "boost saturates at the rails with a hot input");
+        CircuitBoost p;
         p.prepare(48000, 48000);
         p.setKnobs(10);
         std::vector<float> x(48000, 0.0f);
@@ -400,11 +469,11 @@ int main(int argc, char** argv)
         float tail = 0;
         for (float v : x)
             tail = std::isfinite(v) ? std::max(tail, std::abs(v)) : 1e9f;
-        CHECK(tail < 1e-4f, "fortin33 stable (" << tail << ")");
+        CHECK(tail < 1e-4f, "boost stable (" << tail << ")");
     }
     // P3. Pedal circuits against their captures, with sines at real levels (digital full scale 6.91 V peak):
     // the small-signal response (2 mV) at nine frequencies, and the distortion at 220 Hz at 20 mV,
-    // 200 mV and 1 V. Captures are measured once; MJR_CALIBRATE=1 searches the TS9's tuning against them.
+    // 200 mV and 1 V. Captures are measured once; MJR_CALIBRATE=1 searches the overdrive's tuning against them.
     struct PedalMeasure
     {
         std::array<double, 9> gain {}; // dB, small signal
@@ -520,16 +589,15 @@ int main(int argc, char** argv)
         return sc;
     };
     {
-        const auto pedals = juce::File::getSpecialLocation(juce::File::userMusicDirectory).getChildFile("Music Production/NAM Profile/Pedals");
-        const auto tsDir = pedals.getChildFile("Ibanez TS9 Tube Screamer"), boostDir = pedals.getChildFile("Fortin 33");
+        const auto tsDir = overdriveCaptures, boostDir = boostCaptures;
         if (tsDir.isDirectory())
         {
             const auto caps = measureCaptures(tsDir, false);
-            std::cout << "ts9 circuit vs captures (shape at 63 125 250 500 720 1k 2k 4k 8k Hz, dB; thd at 20 mV, 200 mV, 1 V):\n";
-            const auto sc = score(caps, [] { return CircuitTS9(); }, true);
-            std::cout << "ts9 vs captures: level offset " << sc.offset << " dB, spread " << sc.spread << " dB, shape " << sc.shape
+            std::cout << "overdrive circuit vs captures (shape at 63 125 250 500 720 1k 2k 4k 8k Hz, dB; thd at 20 mV, 200 mV, 1 V):\n";
+            const auto sc = score(caps, [] { return CircuitOverdrive(); }, true);
+            std::cout << "overdrive vs captures: level offset " << sc.offset << " dB, spread " << sc.spread << " dB, shape " << sc.shape
                       << " dB, thd " << sc.thd << " dB\n";
-            CHECK(std::abs(sc.offset) < 1.5 && sc.spread < 2.0 && sc.shape < 1.6 && sc.thd < 3.5, "ts9 circuit matches its captures");
+            CHECK(std::abs(sc.offset) < 1.5 && sc.spread < 2.0 && sc.shape < 1.6 && sc.thd < 3.5, "overdrive circuit matches its captures");
             if (std::getenv("MJR_CALIBRATE"))
             {
                 double best = 1e9;
@@ -538,9 +606,9 @@ int main(int argc, char** argv)
                         for (double rail : { 2.5, 3.5 })
                             for (double n : { 1.5, 1.752 })
                             {
-                                CircuitTS9::Tuning t;
+                                CircuitOverdrive::Tuning t;
                                 t.driveTaper = dt, t.levelTaper = 1, t.toneCurve = tc, t.rail = rail, t.diodeN = n;
-                                const auto s = score(caps, [t] { return CircuitTS9(t); }, false);
+                                const auto s = score(caps, [t] { return CircuitOverdrive(t); }, false);
                                 const double total = s.spread + s.shape + s.thd;
                                 if (total < best)
                                     best = total, std::cout << "  calibrate: drive taper " << dt << ", tone curve " << tc << ", rail " << rail
@@ -552,11 +620,11 @@ int main(int argc, char** argv)
         if (boostDir.isDirectory())
         {
             const auto caps = measureCaptures(boostDir, true);
-            std::cout << "fortin33 circuit vs captures (their level is lost: the spread is what counts):\n";
-            const auto sc = score(caps, [] { return CircuitFortin33(); }, true);
-            std::cout << "fortin33 vs captures: level offset " << sc.offset << " dB, spread " << sc.spread << " dB, shape " << sc.shape
+            std::cout << "boost circuit vs captures (their level is lost: the spread is what counts):\n";
+            const auto sc = score(caps, [] { return CircuitBoost(); }, true);
+            std::cout << "boost vs captures: level offset " << sc.offset << " dB, spread " << sc.spread << " dB, shape " << sc.shape
                       << " dB, thd " << sc.thd << " dB\n";
-            CHECK(sc.shape < 0.7, "fortin33 circuit follows the captures' response");
+            CHECK(sc.shape < 0.7, "boost circuit follows the captures' response");
         }
     }
     // 0. Benchmark (informative, machine dependent): seconds of audio per second of CPU, block 128.
@@ -620,8 +688,8 @@ int main(int argc, char** argv)
             const double cpu = juce::Time::highResolutionTicksToSeconds(juce::Time::getHighResolutionTicks() - t0);
             std::cout << "bench " << label << ": " << juce::String(10.0 * (double)x.size() / 48000 / cpu, 1) << "x real time\n";
         };
-        benchPedal("pedal ts9     ", CircuitTS9());
-        benchPedal("pedal fortin33", CircuitFortin33());
+        benchPedal("pedal overdrive", CircuitOverdrive());
+        benchPedal("pedal boost    ", CircuitBoost());
         bench("amp only      ", 48000, false, false);
         bench("amp + cab     ", 48000, true, false);
         bench("full chain    ", 48000, true, true);
@@ -839,8 +907,7 @@ int main(int argc, char** argv)
         };
         {
             NamPedal ts; // nearest-capture choice from the knobs
-            if (ts.setFolder(juce::File::getSpecialLocation(juce::File::userMusicDirectory)
-                                 .getChildFile("Music Production/NAM Profile/Pedals/Ibanez TS9 Tube Screamer")) > 0)
+            if (ts.setFolder(overdriveCaptures) > 0)
             {
                 ts.update(7, 7, 7);
                 CHECK(ts.currentName().endsWith("Drive 7 Tone 7 Level 7"), "drive 7/7/7 picked " << ts.currentName());
@@ -851,8 +918,7 @@ int main(int argc, char** argv)
                 std::cout << "drive pedal: nearest-capture choice ok\n";
             }
             NamPedal boost; // one knob, captures named by percent; the level follows their loudness in between
-            if (boost.setFolder(juce::File::getSpecialLocation(juce::File::userMusicDirectory)
-                                    .getChildFile("Music Production/NAM Profile/Pedals/Fortin 33")) > 0)
+            if (boost.setFolder(boostCaptures) > 0)
             {
                 boost.update(10.0f, 0, 0);
                 CHECK(boost.currentName().endsWith("100%") && std::abs(boost.gainDb(10) - NamPedal::maxBoostDb) < 1e-3f, "boost 10: " << boost.gainDb(10));

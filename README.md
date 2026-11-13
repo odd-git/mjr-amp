@@ -66,6 +66,19 @@ before configuring and it replaces the drawn panel.
 build/mjr-test <library dir> libs/NeuralAmpModelerCore/example_audio/input.wav [snapshot dir]
 ```
 
+The pedal circuits are also checked against pedal captures when `MJR_OVERDRIVE_CAPTURES` (files named
+`... Drive 7 Tone 7 Level 9.nam`) and `MJR_BOOST_CAPTURES` (files named `... 65%.nam`) point at your own
+folders; without them those checks are skipped. `MJR_CALIBRATE=1` also runs the overdrive's parameter search.
+
+## Trademarks and sources
+
+MJR Amp is not affiliated with or endorsed by any amplifier, pedal or software manufacturer. The circuit
+models (amps A/B/C, overdrive, boost) are original code written from published service drawings and
+schematics (component values are facts, no drawing or artwork is reproduced); product names that appear
+in your own capture files belong to their owners. `data/captures.json` only lists, for a commercial capture
+set the author owns, the file names and the knob settings printed in its manual; the captures themselves
+are not included and are not needed (Circuit mode works without any).
+
 ## License
 
-AGPL-3.0 (JUCE is used under its AGPLv3 option). NeuralAmpModelerCore is MIT. The effects are Airwindows plugins (MIT, Chris Johnson), vendored in `libs/airwindows` with their LICENSE: Dynamics3 (compressor), TapeDelay2 (delays), StereoChorus (chorus), Galactic3 (the tank of the reverb and shimmer, `src/Shimmer.h`; the shimmer follows Danial Kooshki's MIT Shimmer-Reverb: octave-up in the feedback loop). The graphic EQ is our own (JUCE peak filters).
+AGPL-3.0 (JUCE is used under its AGPLv3 option). NeuralAmpModelerCore is MIT. The effects are Airwindows plugins (MIT, Chris Johnson), vendored in `libs/airwindows` with their LICENSE: Dynamics3 (compressor), TapeDelay2 (delays), StereoChorus (chorus), Galactic3 (the tank of the reverb and shimmer, `src/Shimmer.h`; the shimmer follows Danial Kooshki's MIT Shimmer-Reverb: octave-up in the feedback loop). The graphic EQ is our own (JUCE peak filters). NeuralAmpModelerCore bundles Eigen (MPL-2.0) and nlohmann/json (MIT), under their own licences in `libs/NeuralAmpModelerCore`.

@@ -5,7 +5,7 @@
 //    the distance: drive = input gain, tone = treble shelf, level = output gain;
 //  - one knob, "... 65%.nam" (a boost): the nearest capture, and between captures the output level
 //    follows the captures' own loudness, interpolated (in dB) along the knob. Pedal captures often lose
-//    their absolute level (the Fortin 33 set attenuates by 9 dB even at full Level), so the curve is
+//    their absolute level (one boost set attenuates by 9 dB even at full Level), so the curve is
 //    anchored at the top: the loudest capture gives maxBoostDb.
 
 #include <juce_dsp/juce_dsp.h>
@@ -85,10 +85,10 @@ public:
             top = std::max(top, s.loudness);
         return maxBoostDb + loudnessAt(knob) - top;
     }
-    // A capture's gain on a guitar DI is its metadata loudness + 16.2 dB (measured on the Fortin set, every
+    // A capture's gain on a guitar DI is its metadata loudness + 16.2 dB (measured on a boost set, every
     // capture within 0.1 dB; tests check it).
     static constexpr float loudnessToGainDb = 16.2f;
-    // ponytail: the Fortin 33's rated maximum boost; make it per-folder if another one-knob pedal needs it.
+    // ponytail: the rated maximum boost of the boost circuit modelled here; make it per-folder if another one-knob pedal needs it.
     static constexpr float maxBoostDb = 20.0f;
     int getLatency() const { return engine.getLatency(); }
 

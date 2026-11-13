@@ -1,19 +1,19 @@
 #pragma once
 // Pedals modelled from their schematics, like the circuit amps. Voltages are AC around each pedal's
 // reference (Vref = 4.5 V). Digital full scale is `Tuning::inputVolts` volts peak at the input and
-// `outputVolts` at the output: the TS9 captures' reamp calibration (+16 dBu in, +18 dBu out).
+// `outputVolts` at the output: the reamp calibration of the overdrive captures (+16 dBu in, +18 dBu out).
 //
-// Overdrive (TS9-style, values from the TS808/TS9 schematic as published in the BeanScream clone):
+// Overdrive (the classic mid-hump op-amp overdrive; values from a published schematic of that circuit):
 //  - input buffer: 20n into 510k to Vref (16 Hz), 2SC1815 emitter follower, 1uF into 10k (16 Hz);
 //  - clipper, non-inverting 4558: 4k7 + 47n from - to Vref (720 Hz), feedback 51k + Drive 500k A
 //    paralleled by 51 pF and two antiparallel 1N914 (gain 12..118 in the mids);
 //  - tone, second 4558: 1k into node X (10k to Vref, 220n to ground) feeding +; Tone 20k from X to -,
 //    1k from out to -, the wiper to ground through 220n + 220 ohm (pivot ~3.3 kHz);
-//  - output: Level 100k A (after 1uF + 1k), emitter follower, 100 ohm / 10k (TS9 values).
+//  - output: Level 100k A (after 1uF + 1k), emitter follower, 100 ohm / 10k.
 
 #include "CircuitAmp.h"
 
-class CircuitTS9
+class CircuitOverdrive
 {
 public:
     struct Tuning
@@ -28,8 +28,8 @@ public:
         double toneCurve = 0.7;                        // exponent on the Tone knob's travel
     };
 
-    CircuitTS9() = default;
-    explicit CircuitTS9(Tuning t) : tune(t) {}
+    CircuitOverdrive() = default;
+    explicit CircuitOverdrive(Tuning t) : tune(t) {}
 
     void prepare(double sampleRate, int maxBlock)
     {
@@ -120,7 +120,7 @@ private:
     juce::dsp::Oversampling<float> os { 1, 2, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, true };
 };
 
-// Boost (Fortin 33-style, values from the schematic the user supplied):
+// Boost (a clean boost with a bass cut, values from the schematic the user supplied):
 //  - Q1 (collector at IN, base to ground through 1M and D8/D9): off at signal level; it clamps
 //    negative peaks below about -1.2 V through the source's resistance;
 //  - IN -> R3 4k7 -> C1 47n -> Q2 base (R4 1M to VR). Q2 + TL071 act as a nullor: the op-amp holds
@@ -131,7 +131,7 @@ private:
 //  - Supply: VC from the charge pump, taken as 18 V; VR at half of it (the drawn divider gives an
 //    impossible operating point, see the notes). Swing about 7.5 V either side of VR.
 // Small signal at full Level: +22 dB around 1 kHz, +3.7 dB at 100 Hz; Level only attenuates.
-class CircuitFortin33
+class CircuitBoost
 {
 public:
     struct Tuning
@@ -145,8 +145,8 @@ public:
         double sourceOhms = 10e3;  // the guitar's pickup, resistance only: what Q1 clamps against
     };
 
-    CircuitFortin33() = default;
-    explicit CircuitFortin33(Tuning t) : tune(t) {}
+    CircuitBoost() = default;
+    explicit CircuitBoost(Tuning t) : tune(t) {}
 
     void prepare(double sampleRate, int maxBlock)
     {

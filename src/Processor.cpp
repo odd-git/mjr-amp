@@ -184,7 +184,7 @@ MJRAmpProcessor::MJRAmpProcessor()
     for (int fx : namFx)
     {
         const auto remembered = rememberedPedalFile(fx).loadFileAsString().trim();
-        const char* fallback = fx == driveFx ? "Ibanez TS9 Tube Screamer" : "Fortin 33";
+        const char* fallback = fx == driveFx ? "Overdrive" : "Boost";
         setPedalFolder(fx, remembered.isNotEmpty() ? juce::File(remembered) : pedals.getChildFile(fallback));
     }
     startTimerHz(20);
